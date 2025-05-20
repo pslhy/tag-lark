@@ -81,6 +81,7 @@ TERMINALS = {
     '_LBRACE': r'\{',
     '_RBRACE': r'\}',
     'OP': '[+*]|[?](?![a-z_])',
+    '_AT': '@',
     '_COLON': ':',
     '_COMMA': ',',
     '_OR': r'\|',
@@ -109,9 +110,11 @@ TERMINALS = {
 RULES = {
     'start': ['_list'],
     '_list':  ['_item', '_list _item'],
-    '_item':  ['rule', 'term', 'ignore', 'import', 'declare', 'override', 'extend', '_NL'],
+    '_item':  ['rules', 'term', 'ignore', 'import', 'declare', 'override', 'extend', '_NL'],
 
+    '?rules': ['rule', 'tag_rule'],
     'rule': ['rule_modifiers RULE template_params priority _COLON expansions _NL'],
+    'tag_rule' : ['rule_modifiers RULE template_params _AT tag priority _COLON expansions _NL'],
     'rule_modifiers': ['RULE_MODIFIERS',
                        ''],
     'priority': ['_DOT NUMBER',
@@ -138,13 +141,17 @@ RULES = {
 
     '?atom': ['_LPAR expansions _RPAR',
               'maybe',
-              'value'],
+              'value',
+              'tag_usage'],
 
     'value': ['terminal',
               'nonterminal',
               'literal',
               'range',
               'template_usage'],
+    
+    'tag': ['RULE'],
+    'tag_usage': ['value _AT tag'],
 
     'terminal': ['TERMINAL'],
     'nonterminal': ['RULE'],
@@ -917,6 +924,10 @@ def _find_used_symbols(tree):
     return {t.name for x in tree.find_data('expansion')
             for t in x.scan_values(lambda t: isinstance(t, Symbol))}
 
+def _find_used_symbols_not_by_tag(tree):
+    assert tree.data == 'expansions'
+    return {t.name for x in tree.find_data('expansion')
+            for t in x.scan_tree(lambda t: getattr(t, 'data', None) != 'tag_usage', lambda t: isinstance(t, Symbol))}
 
 def _get_parser():
     try:
@@ -1051,6 +1062,11 @@ def _mangle_definition_tree(exp, mangle):
 
     return exp
 
+def _make_tag_rule_tuple(modifiers_tree, name, params, tag, priority_tree, expansions):
+    name, params, exp, opts = _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions)
+    tag = tag.data if tag else None
+    return name, params, exp, opts, tag
+
 def _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions):
     if modifiers_tree.children:
         m ,= modifiers_tree.children
@@ -1076,11 +1092,12 @@ def _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions):
 
 
 class Definition:
-    def __init__(self, is_term, tree, params=(), options=None):
+    def __init__(self, is_term, tree, params=(), options=None, tag=None):
         self.is_term = is_term
         self.tree = tree
         self.params = tuple(params)
         self.options = options
+        self.tag = tag
 
 class GrammarBuilder:
 
@@ -1124,7 +1141,7 @@ class GrammarBuilder:
         return options
 
 
-    def _define(self, name, is_term, exp, params=(), options=None, *, override=False):
+    def _define(self, name, is_term, exp, params=(), options=None, tag=None, *, override=False):
         if name in self._definitions:
             if not override:
                 self._grammar_error(is_term, "{Type} '{name}' defined more than once", name)
@@ -1134,7 +1151,7 @@ class GrammarBuilder:
         if name.startswith('__'):
             self._grammar_error(is_term, 'Names starting with double-underscore are reserved (Error at {name})', name)
 
-        self._definitions[name] = Definition(is_term, exp, params, self._check_options(is_term, options))
+        self._definitions[name] = Definition(is_term, exp, params, self._check_options(is_term, options), tag=tag)
 
     def _extend(self, name, is_term, exp, params=(), options=None):
         if name not in self._definitions:
@@ -1220,12 +1237,17 @@ class GrammarBuilder:
 
         if tree.data == 'rule':
             name, params, exp, opts = _make_rule_tuple(*tree.children)
+            tag = None
+            is_term = False
+        elif tree.data == 'tag_rule':
+            name, params, exp, opts, tag = _make_tag_rule_tuple(*tree.children)
             is_term = False
         else:
             name = tree.children[0].value
             params = ()     # TODO terminal templates
             opts = int(tree.children[1]) if len(tree.children) == 3 else TOKEN_DEFAULT_PRIORITY # priority
             exp = tree.children[-1]
+            tag = None
             is_term = True
 
         if mangle is not None:
@@ -1233,7 +1255,7 @@ class GrammarBuilder:
             name = mangle(name)
 
         exp = _mangle_definition_tree(exp, mangle)
-        return name, is_term, exp, params, opts
+        return name, is_term, exp, params, opts, tag
 
 
     def load_grammar(self, grammar_text: str, grammar_name: str="<?>", mangle: Optional[Callable[[str], str]]=None) -> None:
@@ -1255,7 +1277,7 @@ class GrammarBuilder:
             self.do_import(dotted_path, base_path, aliases, mangle)
 
         for stmt in tree.children:
-            if stmt.data in ('term', 'rule'):
+            if stmt.data in ('term', 'rule', 'tag_rule'):
                 self._define(*self._unpack_definition(stmt, mangle))
             elif stmt.data == 'override':
                 r ,= stmt.children
@@ -1353,11 +1375,30 @@ class GrammarBuilder:
             if exp is None: # Remaining checks don't apply to abstract rules/terminals (created with %declare)
                 continue
 
+            if d.tag is not None:
+                if d.tag in self._definitions:
+                    raise GrammarError("Tag %s conflicts with rule `%s` (in tag-rule `%s`)" % (d.tag, d.tag, name))
+
+            is_tag_used = (d.tag is None) or False
+            for temp in exp.find_data('tag_usage'):
+                sym = temp.children[0].children[0].name
+                tag = temp.children[1].children[0].value
+                sym_def = self._definitions[sym]
+                if not is_tag_used and tag == d.tag:
+                    is_tag_used = True
+                if tag in self._definitions: 
+                    raise GrammarError("Tag %s conflicts with rule `%s` (in rule `%s`)" % (tag, tag, name))
+                if not sym_def.is_term and sym_def.tag is None:
+                    raise GrammarError("Tag %s used in rule `%s` (in rule `%s`) but not defined" % (tag, sym, name))
+
+            if not is_tag_used:
+                raise GrammarError("Tag `%s` not used in tag-rule `%s`" % (d.tag, name))
+
             for temp in exp.find_data('template_usage'):
                 sym = temp.children[0].name
                 args = temp.children[1:]
-                if sym not in params:
-                    if sym not in self._definitions:
+                if sym not in params: # not a template parameter
+                    if sym not in self._definitions: 
                         self._grammar_error(d.is_term, "Template '%s' used but not defined (in {type} {name})" % sym, name)
                     if len(args) != len(self._definitions[sym].params):
                         expected, actual = len(self._definitions[sym].params), len(args)
@@ -1367,6 +1408,10 @@ class GrammarBuilder:
             for sym in _find_used_symbols(exp):
                 if sym not in self._definitions and sym not in params:
                     self._grammar_error(d.is_term, "{Type} '{name}' used but not defined (in {type2} {name2})", sym, name)
+            
+            for sym in _find_used_symbols_not_by_tag(exp):
+                if self._definitions[sym].tag is not None:
+                    raise GrammarError("tag-rule `%s` used but tag not defined (in rule `%s`)" % (sym, name))
 
         if not set(self._definitions).issuperset(self._ignore_names):
             raise GrammarError("Terminals %s were marked to ignore but were not defined!" % (set(self._ignore_names) - set(self._definitions)))

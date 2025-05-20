@@ -212,6 +212,18 @@ class Tree(Generic[_Leaf_T]):
                 if pred(c):
                     yield c
 
+    def scan_tree(self, pred_tree, pred_leaf):
+        for c in self.children:
+            if isinstance(c, Tree):
+                if pred_tree(c):
+                    for t in c.scan_tree(pred_tree, pred_leaf):
+                        yield t
+            else:
+                if pred_leaf(c):
+                    yield c
+
+
+
     def __deepcopy__(self, memo):
         return type(self)(self.data, deepcopy(self.children, memo), meta=self._meta)
 
