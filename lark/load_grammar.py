@@ -114,7 +114,7 @@ RULES = {
 
     '?rules': ['rule', 'tag_rule'],
     'rule': ['rule_modifiers RULE template_params priority _COLON expansions _NL'],
-    'tag_rule' : ['rule_modifiers RULE template_params _AT tag priority _COLON expansions _NL'],
+    'tag_rule' : ['rule_modifiers RULE template_params _AT tag_param priority _COLON expansions _NL'],
     'rule_modifiers': ['RULE_MODIFIERS',
                        ''],
     'priority': ['_DOT NUMBER',
@@ -142,6 +142,7 @@ RULES = {
     '?atom': ['_LPAR expansions _RPAR',
               'maybe',
               'value',
+              'tag_call',
               'tag_usage'],
 
     'value': ['terminal',
@@ -150,7 +151,9 @@ RULES = {
               'range',
               'template_usage'],
     
-    'tag': ['RULE'],
+    '?tag': ['TERMINAL'],
+    '?tag_param': ['RULE'],
+    'tag_call': ['value _AT tag_param'],
     'tag_usage': ['value _AT tag'],
 
     'terminal': ['TERMINAL'],
@@ -744,6 +747,10 @@ class Grammar:
             anon_tokens_transf.rule_options = rule_options
             tree = transformer.transform(rule_tree)
             res: Tree = ebnf_to_bnf.transform(tree)
+            print("before")
+            print(rule_tree.pretty())
+            print("after")
+            print(res.pretty())
             rules.append((name, res, options))
         rules += ebnf_to_bnf.new_rules
 
@@ -927,7 +934,7 @@ def _find_used_symbols(tree):
 def _find_used_symbols_not_by_tag(tree):
     assert tree.data == 'expansions'
     return {t.name for x in tree.find_data('expansion')
-            for t in x.scan_tree(lambda t: getattr(t, 'data', None) != 'tag_usage', lambda t: isinstance(t, Symbol))}
+            for t in x.scan_tree(lambda t: getattr(t, 'data', None) not in ['tag_usage', 'tag_call'], lambda t: isinstance(t, Symbol))}
 
 def _get_parser():
     try:
@@ -1064,7 +1071,7 @@ def _mangle_definition_tree(exp, mangle):
 
 def _make_tag_rule_tuple(modifiers_tree, name, params, tag, priority_tree, expansions):
     name, params, exp, opts = _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions)
-    tag = tag.data if tag else None
+    tag = tag.value if tag else None
     return name, params, exp, opts, tag
 
 def _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions):
@@ -1379,17 +1386,26 @@ class GrammarBuilder:
                 if d.tag in self._definitions:
                     raise GrammarError("Tag %s conflicts with rule `%s` (in tag-rule `%s`)" % (d.tag, d.tag, name))
 
-            is_tag_used = (d.tag is None) or False
+            is_tag_used = (d.tag is None)
             for temp in exp.find_data('tag_usage'):
                 sym = temp.children[0].children[0].name
-                tag = temp.children[1].children[0].value
+                tag = temp.children[1].value
                 sym_def = self._definitions[sym]
-                if not is_tag_used and tag == d.tag:
-                    is_tag_used = True
                 if tag in self._definitions: 
                     raise GrammarError("Tag %s conflicts with rule `%s` (in rule `%s`)" % (tag, tag, name))
                 if not sym_def.is_term and sym_def.tag is None:
                     raise GrammarError("Tag %s used in rule `%s` (in rule `%s`) but not defined" % (tag, sym, name))
+
+            for temp in exp.find_data('tag_call'):
+                sym = temp.children[0].children[0].name
+                tag = temp.children[1].value
+                print("T", tag, d.tag)
+                if d.tag is None:
+                    raise GrammarError("Parameter-tag `%s` used but not defined (in rule `%s`)" % (tag, name))
+                if tag != d.tag:
+                    raise GrammarError("%s used but %s is a parameter-tag (in rule `%s`)" % (tag, d.tag, name))
+                is_tag_used = True
+                
 
             if not is_tag_used:
                 raise GrammarError("Tag `%s` not used in tag-rule `%s`" % (d.tag, name))
