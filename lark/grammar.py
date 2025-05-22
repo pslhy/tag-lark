@@ -51,12 +51,36 @@ class Terminal(Symbol):
     def renamed(self, f):
         return type(self)(f(self.name), self.filter_out)
 
+class TagTerminal(Terminal):
+    __serialize_fields__ = 'name', 'filter_out', 'tag'
+
+    def __init__(self, name: str, filter_out: bool = False, tag: Optional[str] = None, is_parameter: bool = False) -> None:
+        super().__init__(name, filter_out)
+        self.tag = tag
+        self.is_parameter = is_parameter
+
+    def __repr__(self):
+        return 'Termianl(%r)@%r' % (self.name, self.tag if self.tag else "__param__")
+
+    @property
+    def fullrepr(self):
+        return 'Terminal(%r, %r)@%r' % (type(self).__name__, self.name, self.filter_out, self.tag if self.tag else "")
 
 class NonTerminal(Symbol):
     __serialize_fields__ = 'name',
 
     is_term: ClassVar[bool] = False
 
+class TagNonTerminal(NonTerminal):
+    __serialize_fields__ = 'name', 'tag'
+    
+    def __init__(self, name: str, tag: Optional[str] = None, is_parameter : bool = False) -> None:
+        super().__init__(name)
+        self.tag = tag
+        self.is_parameter = is_parameter
+    
+    def __repr__(self):
+        return 'NonTermianl(%r)@%r' % (self.name, self.tag if self.tag else "__param__")
 
 class RuleOptions(Serialize):
     __serialize_fields__ = 'keep_all_tokens', 'expand1', 'priority', 'template_source', 'empty_indices'

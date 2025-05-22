@@ -17,7 +17,7 @@ from .lexer import Token, TerminalDef, PatternStr, PatternRE, Pattern
 from .parse_tree_builder import ParseTreeBuilder
 from .parser_frontends import ParsingFrontend
 from .common import LexerConf, ParserConf
-from .grammar import RuleOptions, Rule, Terminal, NonTerminal, Symbol, TOKEN_DEFAULT_PRIORITY
+from .grammar import RuleOptions, Rule, Terminal, NonTerminal, Symbol, TOKEN_DEFAULT_PRIORITY, TagTerminal, TagNonTerminal
 from .utils import classify, dedup_list
 from .exceptions import GrammarError, UnexpectedCharacters, UnexpectedToken, ParseError, UnexpectedInput
 
@@ -519,6 +519,43 @@ class _ReplaceSymbols(Transformer_InPlace):
             return self.__default__('template_usage', [self.names[name]] + c[1:], None)
         return self.__default__('template_usage', c, None)
 
+class PrepareTag(Transformer_InPlace):
+    def tag_call(self, c):
+        assert len(c) == 2
+        sym, tag_token = c
+        if isinstance(sym, Terminal):
+            tagged_sym = TagTerminal(
+                sym.name,
+                sym.filter_out,
+                is_parameter=True,
+            )
+        elif isinstance(sym, NonTerminal):
+            tagged_sym = TagNonTerminal(
+                sym.name,
+                is_parameter=True,
+            )
+        else:
+            assert False, sym
+        return tagged_sym
+
+    def tag_usage(self, c):
+        assert len(c) == 2
+        sym, tag_token = c
+        if isinstance(sym, Terminal):
+            tagged_sym = TagTerminal(
+                sym.name,
+                sym.filter_out,
+                tag=tag_token.value,
+            )
+        elif isinstance(sym, NonTerminal):
+            tagged_sym = TagNonTerminal(
+                sym.name,
+                tag=tag_token.value,
+            )
+        else:
+            assert False, sym
+        return tagged_sym
+
 
 class ApplyTemplates(Transformer_InPlace):
     """Apply the templates, creating new rules that represent the used templates"""
@@ -727,6 +764,9 @@ class Grammar:
         # 1. Pre-process terminals
         anon_tokens_transf = PrepareAnonTerminals(terminals)
         transformer = PrepareLiterals() * ValidateSymbols() * anon_tokens_transf  # Adds to terminals
+
+        # 1.5. Pre-process tags
+        transformer *= PrepareTag()
 
         # 2. Inline Templates
 
