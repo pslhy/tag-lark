@@ -1112,6 +1112,7 @@ def _mangle_definition_tree(exp, mangle):
 def _make_tag_rule_tuple(modifiers_tree, name, params, tag, priority_tree, expansions):
     name, params, exp, opts = _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions)
     tag = tag.value if tag else None
+    opts.is_tag_rule = True
     return name, params, exp, opts, tag
 
 def _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions):
