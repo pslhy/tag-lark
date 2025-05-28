@@ -1438,9 +1438,11 @@ class GrammarBuilder:
                     raise GrammarError("Tag %s used in rule `%s` (in rule `%s`) but not defined" % (tag, sym, name))
 
             for temp in exp.find_data('tag_call'):
-                sym = temp.children[0].children[0].name
+                if isinstance(temp.children[0].children[0], Tree):
+                    sym = temp.children[0].children[0].children[0].value
+                else:
+                    sym = temp.children[0].children[0].name
                 tag = temp.children[1].value
-                print("T", tag, d.tag)
                 if d.tag is None:
                     raise GrammarError("Parameter-tag `%s` used but not defined (in rule `%s`)" % (tag, name))
                 if tag != d.tag:
@@ -1467,7 +1469,7 @@ class GrammarBuilder:
                     self._grammar_error(d.is_term, "{Type} '{name}' used but not defined (in {type2} {name2})", sym, name)
             
             for sym in _find_used_symbols_not_by_tag(exp):
-                if self._definitions[sym].tag is not None:
+                if self._definitions.get(sym, None) and self._definitions[sym].tag is not None:
                     raise GrammarError("tag-rule `%s` used but tag not defined (in rule `%s`)" % (sym, name))
 
         if not set(self._definitions).issuperset(self._ignore_names):
