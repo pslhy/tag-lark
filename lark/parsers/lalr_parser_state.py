@@ -1,6 +1,7 @@
 from copy import deepcopy, copy
-from typing import Dict, Any, Generic, List
-from ..lexer import Token, LexerThread
+from typing import Dict, Any, Generic, List, Tuple, Optional, Set
+from ..grammar import NonTerminal
+from ..lexer import Token, TagToken, LexerThread
 from ..common import ParserCallbacks
 
 from .lalr_analysis import Shift, ParseTableBase, StateT
@@ -107,4 +108,87 @@ class ParserState(Generic[StateT]):
 
                 if is_end and state_stack[-1] == end_state:
                     return value_stack[-1]
+    
+    def _get_nth_last_token(self, n: int) -> Tuple[int, Optional[Token]]:
+        for i, value in enumerate(reversed(self.value_stack)):
+            if isinstance(value, Token):
+                if n == 0:
+                    return i, value
+                n -= 1
+            else:
+                n, token = value._get_nth_last_token(n)
+                if n == 0:
+                    return i, token
+        return -1, None
+
+    def _stack_traverse(self, idx: int, target: str, visited: Set[str]) -> Tuple[Set[Optional[str]], Set[str]]:
+        # TODO: make this more efficient - graph version?
+        if idx == len(self.state_stack):
+            return set(), visited
+        _idx = -(idx + 1)
+        states = self.state_stack[_idx]
+        possible_tags = set()
+        found_same_depth = False
+
+        for state in states:
+            try:
+                nxt = state.next
+            except IndexError:
+                continue
+            rule_name = state.rule.alias or state.rule.options.template_source or state.rule.origin.name
+            rule_name = str(rule_name)
+
+            if not isinstance(nxt, NonTerminal) or nxt.name != target or rule_name in visited:
+                continue
+            found_same_depth = True
+            if not getattr(nxt, 'is_parameter', False):
+                possible_tags.add(getattr(nxt, 'tag', None))
+            else:
+                visited.add(rule_name)
+                new_tags, visited = self._stack_traverse(idx, rule_name, visited)
+                possible_tags.update(new_tags)
+            
+        if found_same_depth:
+            return possible_tags, visited
+        else:
+            return self._stack_traverse(idx + 1, target, visited)
+
+
+    def _get_possible_tag_from_state(self, idx: int) -> Set[Optional[str]]:
+        _idx = -(idx + 1)
+        value = self.value_stack[_idx]
+        root = value.type if isinstance(value, Token) else value.data
+        visited = set()
+        states = self.state_stack[_idx]
+        possible_tags = set()
+        for state in states:
+            ptr = state.index
+            if ptr == 0:
+                continue
+            rule = state.rule
+            prev_sym = rule.expansion[ptr - 1]
+            if prev_sym.name != root:
+                continue
+            if not getattr(prev_sym, 'is_parameter', False):
+                possible_tags.add(getattr(prev_sym, 'tag', None))
+            else:
+                parent_rule = rule.alias or rule.options.template_source or rule.origin.name
+                parent_rule = str(parent_rule)
+                if parent_rule not in visited:
+                    visited.add(parent_rule)
+                    new_tags, visited = self._stack_traverse(idx, parent_rule, visited)
+                    possible_tags.update(new_tags)
+
+        return possible_tags
+
+
+    def get_nth_last_token_tag(self, n: int) -> Set[Optional[str]]:
+        value_idx, token = self._get_nth_last_token(n)
+        if isinstance(token, Token) or token.is_undecided:
+            return self._get_possible_tag_from_state(value_idx)
+        elif isinstance(token, TagToken): # value is TagTree
+            return {token.tag}
+
+        return set()
+
 ###}

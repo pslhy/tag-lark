@@ -134,6 +134,22 @@ class Tree(Generic[_Leaf_T]):
     def __hash__(self) -> int:
         return hash((self.data, tuple(self.children)))
 
+    def _get_nth_last_leaf(self, n: int):
+        for c in reversed(self.children):
+            if isinstance(c, Tree):
+                (n, leaf) = c._get_nth_last_leaf(n)
+                if n == 0:
+                    return n, leaf
+            else:
+                if n == 0:
+                    return n, c
+                n -= 1
+        return n, None
+                
+
+    def get_nth_last_leaf(self, n: int):
+        return self._get_nth_last_leaf(n)[1]
+
     def iter_subtrees(self) -> 'Iterator[Tree[_Leaf_T]]':
         """Depth-first iteration.
 
