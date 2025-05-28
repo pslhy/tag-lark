@@ -3,8 +3,8 @@
 from typing import List
 
 from .exceptions import GrammarError, ConfigurationError
-from .lexer import Token
-from .tree import Tree
+from .lexer import Token, TagToken
+from .tree import Tree, TagTree
 from .visitors import Transformer_InPlace
 from .visitors import _vargs_meta, _vargs_meta_inline
 
@@ -89,6 +89,24 @@ def make_propagate_positions(option):
         return None
 
     raise ConfigurationError('Invalid option for propagate_positions: %r' % option)
+
+
+class TagApplier:
+    def __init__(self, expansion, node_builder):
+        self.expansion = expansion
+        self.node_builder = node_builder
+    
+    def __call__(self, children):
+        applied = []
+        for child, sym in zip(children, self.expansion):
+            is_parameter = getattr(sym, 'is_parameter', False)
+            tag = getattr(sym, 'tag', None)
+            if isinstance(child, Token):
+                child = TagToken(child)
+            if not is_parameter and child.is_undecided:
+                child.decide(tag)
+            applied.append(child)
+        return self.node_builder(applied)
 
 
 class ChildFilter:
@@ -329,11 +347,12 @@ def apply_visit_wrapper(func, name, wrapper):
 
 
 class ParseTreeBuilder:
-    def __init__(self, rules, tree_class, propagate_positions=False, ambiguous=False, maybe_placeholders=False):
+    def __init__(self, rules, tree_class, propagate_positions=False, ambiguous=False, maybe_placeholders=False, taglark=False):
         self.tree_class = tree_class
         self.propagate_positions = propagate_positions
         self.ambiguous = ambiguous
         self.maybe_placeholders = maybe_placeholders
+        self.taglark = taglark
 
         self.rule_builders = list(self._init_builders(rules))
 
@@ -345,14 +364,16 @@ class ParseTreeBuilder:
             keep_all_tokens = options.keep_all_tokens
             expand_single_child = options.expand1
 
-            wrapper_chain = list(filter(None, [
+            chains = [
                 (expand_single_child and not rule.alias) and ExpandSingleChild,
                 maybe_create_child_filter(rule.expansion, keep_all_tokens, self.ambiguous, options.empty_indices if self.maybe_placeholders else None),
+                self.taglark and partial(TagApplier, rule.expansion),
                 propagate_positions,
                 self.ambiguous and maybe_create_ambiguous_expander(self.tree_class, rule.expansion, keep_all_tokens),
                 self.ambiguous and partial(AmbiguousIntermediateExpander, self.tree_class)
-            ]))
+            ]
 
+            wrapper_chain = list(filter(None, chains))
             yield rule, wrapper_chain
 
     def create_callback(self, transformer=None):
@@ -360,8 +381,11 @@ class ParseTreeBuilder:
 
         default_handler = getattr(transformer, '__default__', None)
         if default_handler:
+            self.taglark = False
             def default_callback(data, children):
                 return default_handler(data, children, None)
+        elif self.taglark:
+            default_callback = TagTree
         else:
             default_callback = self.tree_class
 
@@ -376,7 +400,10 @@ class ParseTreeBuilder:
                 elif isinstance(transformer, Transformer_InPlace):
                     f = inplace_transformer(f)
             except AttributeError:
-                f = partial(default_callback, user_callback_name)
+                if self.taglark:
+                    f = partial(default_callback, user_callback_name, rule.options.is_tag_rule)
+                else:
+                    f = partial(default_callback, user_callback_name)
 
             for w in wrapper_chain:
                 f = w(f)

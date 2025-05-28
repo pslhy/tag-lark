@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from typing import List, Callable, Iterator, Union, Optional, Generic, TypeVar, TYPE_CHECKING
 
-from .lexer import Token
+from .lexer import Token, TagToken
 
 if TYPE_CHECKING:
     from .lexer import TerminalDef
@@ -237,6 +237,29 @@ class Tree(Generic[_Leaf_T]):
 
 ParseTree = Tree['Token']
 
+class TagTree(Tree):
+    def __init__(self, data: str, is_undecided: bool, children: 'List[Branch[_Leaf_T]]', meta: Optional[Meta]=None) -> None:
+        super().__init__(data, children, meta)
+        self.is_undecided = is_undecided
+        self.tag = None
+
+    def decide(self, tag: Optional[str] = None):
+        assert self.is_undecided, "Cannot decide a tree that is already decided"
+        self.is_undecided = False
+        self.tag = tag
+        for child in self.children:
+            if isinstance(child, TagTree) and child.is_undecided:
+                child.decide(tag)
+            elif isinstance(child, TagToken) and child.is_undecided:
+                child.decide(tag)
+
+    def _pretty_label(self):
+        label = super()._pretty_label()
+        if self.is_undecided:
+            return label + "@?"
+        if self.tag is not None:
+            return label + "@" + self.tag
+        return label
 
 class SlottedTree(Tree):
     __slots__ = 'data', 'children', 'rule', '_meta'

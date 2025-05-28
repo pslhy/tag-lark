@@ -270,6 +270,41 @@ class Token(str):
 
     __hash__ = str.__hash__
 
+# TODO: several default method for utils
+class TagToken:
+    def __init__(self, token, is_undecided=True, tag: Optional[str] = None):
+        if not isinstance(token, Token):
+            raise TypeError("TagToken must be initialized with a Token instance")
+        self.token = token
+        self.is_undecided = is_undecided
+        self.tag = tag
+
+    def decide(self, tag: Optional[str]=None):
+        """Decide the tag of this token and all its children."""
+        assert self.is_undecided, "Cannot decide a token that is already decided"
+        self.is_undecided = False
+        self.tag = tag
+
+    def to_tag_str(self, string):
+        """Convert the token to a string representation with its tag."""
+        if self.is_undecided:
+            return string + "@?"
+        if self.tag is not None:
+            return string + "@%s" % self.tag
+        return string
+
+    def __repr__(self):
+        token_str = self.token.__repr__()
+        return self.to_tag_str(token_str)
+
+    def __str__(self):
+        """Return the string representation of the token with its tag."""
+        token_str = str(self.token)
+        return self.to_tag_str(token_str)
+
+    def __getattr__(self, item):
+        """Delegate all attribute access to the underlying token."""
+        return getattr(self.token, item)
 
 class LineCounter:
     "A utility class for keeping track of line & column information"

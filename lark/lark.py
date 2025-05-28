@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 from .exceptions import ConfigurationError, assert_config, UnexpectedInput
 from .utils import Serialize, SerializeMemoizer, FS, logger, TextOrSlice
 from .load_grammar import load_grammar, FromPackageLoader, Grammar, verify_used_files, PackageResource, sha256_digest
-from .tree import Tree
+from .tree import Tree, TagTree
 from .common import LexerConf, ParserConf, _ParserArgType, _LexerArgType
 
 from .lexer import Lexer, BasicLexer, TerminalDef, LexerThread, Token
@@ -71,6 +71,7 @@ class LarkOptions(Serialize):
     edit_terminals: Optional[Callable[[TerminalDef], TerminalDef]]
     import_paths: 'List[Union[str, Callable[[Union[None, str, PackageResource], str], Tuple[str, str]]]]'
     source_path: Optional[str]
+    taglark: bool
 
     OPTIONS_DOC = r"""
     **===  General Options  ===**
@@ -147,6 +148,8 @@ class LarkOptions(Serialize):
             A List of either paths or loader functions to specify from where grammars are imported
     source_path
             Override the source of from where the grammar was loaded. Useful for relative imports and unconventional grammar loading
+    taglark
+            TBA
     **=== End of Options ===**
     """
     if __doc__:
@@ -182,6 +185,7 @@ class LarkOptions(Serialize):
         'ordered_sets': True,
         'import_paths': [],
         'source_path': None,
+        'taglark': False,
         '_plugins': {},
     }
 
@@ -473,9 +477,11 @@ class Lark(Serialize):
                     self.options.tree_class or Tree,
                     self.options.propagate_positions,
                     self.options.parser != 'lalr' and self.options.ambiguity == 'explicit',
-                    self.options.maybe_placeholders
+                    self.options.maybe_placeholders,
+                    self.options.taglark
                 )
             self._callbacks = self._parse_tree_builder.create_callback(self.options.transformer)
+        print("TT", self.options.transformer)
         self._callbacks.update(_get_lexer_callbacks(self.options.transformer, self.terminals))
 
     def _build_parser(self) -> "ParsingFrontend":
