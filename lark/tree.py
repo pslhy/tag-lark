@@ -277,6 +277,18 @@ class TagTree(Tree):
             return label + "@" + self.tag
         return label
 
+    
+    def __deepcopy__(self, memo):
+        copied = type(self)(self.data, self.is_undecided, deepcopy(self.children, memo), meta=self._meta)
+        copied.tag = self.tag
+        return copied
+
+    def copy(self):
+        copied = type(self)(self.data, self.is_undecided, self.children)
+        copied.tag = self.tag
+        return copied
+
+
 class SlottedTree(Tree):
     __slots__ = 'data', 'children', 'rule', '_meta'
 
