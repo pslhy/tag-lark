@@ -140,6 +140,8 @@ class Tree(Generic[_Leaf_T]):
                 (n, leaf) = c._get_nth_last_leaf(n)
                 if n == 0:
                     return n, leaf
+            elif c is None:
+                continue
             else:
                 if n == 0:
                     return n, c

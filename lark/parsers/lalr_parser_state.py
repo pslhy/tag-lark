@@ -3,6 +3,7 @@ from typing import Dict, Any, Generic, List, Tuple, Optional, Set
 from ..grammar import NonTerminal
 from ..lexer import Token, TagToken, LexerThread
 from ..common import ParserCallbacks
+from utils import utils
 
 from .lalr_analysis import Shift, ParseTableBase, StateT
 from lark.exceptions import UnexpectedToken
@@ -116,8 +117,8 @@ class ParserState(Generic[StateT]):
                     return i, value
                 n -= 1
             else:
-                n, token = value._get_nth_last_token(n)
-                if n == 0:
+                n, token = value._get_nth_last_leaf(n)
+                if token is not None:
                     return i, token
         return -1, None
 
@@ -183,7 +184,9 @@ class ParserState(Generic[StateT]):
 
 
     def get_nth_last_token_tag(self, n: int) -> Set[Optional[str]]:
+        utils.info(f"Getting tag for the {n}th last token")
         value_idx, token = self._get_nth_last_token(n)
+        utils.info(f"Value index: {value_idx}, Token: {token.type}")
         if isinstance(token, Token) or token.is_undecided:
             return self._get_possible_tag_from_state(value_idx)
         elif isinstance(token, TagToken): # value is TagTree
