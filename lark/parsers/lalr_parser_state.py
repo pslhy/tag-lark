@@ -183,9 +183,7 @@ class ParserState(Generic[StateT]):
 
 
     def get_nth_last_token_tag(self, n: int) -> Set[Optional[str]]:
-        utils.info(f"Getting tag for the {n}th last token")
         value_idx, token = self._get_nth_last_token(n)
-        utils.info(f"Value index: {value_idx}, Token: {token.type}")
         if isinstance(token, Token) or token.is_undecided:
             return self._get_possible_tag_from_state(value_idx)
         elif isinstance(token, TagToken): # value is TagTree

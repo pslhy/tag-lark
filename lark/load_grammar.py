@@ -787,10 +787,6 @@ class Grammar:
             anon_tokens_transf.rule_options = rule_options
             tree = transformer.transform(rule_tree)
             res: Tree = ebnf_to_bnf.transform(tree)
-            print("before")
-            print(rule_tree.pretty())
-            print("after")
-            print(res.pretty())
             rules.append((name, res, options))
         rules += ebnf_to_bnf.new_rules
 

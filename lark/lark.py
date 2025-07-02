@@ -481,7 +481,6 @@ class Lark(Serialize):
                     self.options.taglark
                 )
             self._callbacks = self._parse_tree_builder.create_callback(self.options.transformer)
-        print("TT", self.options.transformer)
         self._callbacks.update(_get_lexer_callbacks(self.options.transformer, self.terminals))
 
     def _build_parser(self) -> "ParsingFrontend":
