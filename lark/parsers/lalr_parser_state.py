@@ -3,7 +3,6 @@ from typing import Dict, Any, Generic, List, Tuple, Optional, Set
 from ..grammar import NonTerminal
 from ..lexer import Token, TagToken, LexerThread
 from ..common import ParserCallbacks
-from utils import utils
 
 from .lalr_analysis import Shift, ParseTableBase, StateT
 from lark.exceptions import UnexpectedToken
