@@ -4,7 +4,7 @@ from .exceptions import ConfigurationError, GrammarError, assert_config
 from .utils import get_regexp_width, Serialize, TextOrSlice, TextSlice
 from .lexer import LexerThread, BasicLexer, ContextualLexer, Lexer
 from .parsers import earley, xearley, cyk
-from .parsers.lalr_parser import LALR_Parser
+from .parsers.lalr_parser import LALR_Parser, TagLALR_Parser
 from .tree import Tree
 from .common import LexerConf, ParserConf, _ParserArgType, _LexerArgType
 
@@ -176,8 +176,12 @@ def create_contextual_lexer(lexer_conf: LexerConf, parser, postlex, options) -> 
 def create_lalr_parser(lexer_conf: LexerConf, parser_conf: ParserConf, options=None) -> LALR_Parser:
     debug = options.debug if options else False
     strict = options.strict if options else False
-    cls = (options and options._plugins.get('LALR_Parser')) or LALR_Parser
-    return cls(parser_conf, debug=debug, strict=strict)
+    if options.taglark if options else False:
+        cls = TagLALR_Parser
+        return cls(parser_conf, debug=debug, strict=strict)
+    else:
+        cls = (options and options._plugins.get('LALR_Parser')) or LALR_Parser
+        return cls(parser_conf, debug=debug, strict=strict)
 
 _parser_creators['lalr'] = create_lalr_parser
 
