@@ -30,6 +30,31 @@ class ParseConf(Generic[StateT]):
         self.callbacks = callbacks
         self.start = start
 
+class TagParseConf(Generic[StateT]):
+    __slots__ = 'parse_table', 'callbacks', 'start', 'start_state', 'end_state', 'states', 'tags'
+
+    parse_table: ParseTableBase[StateT]
+    callbacks: ParserCallbacks
+    start: str
+
+    start_state: StateT
+    end_state: StateT
+    states: Dict[StateT, Dict[str, tuple]]
+
+    tags: List[Optional[str]]
+
+    def __init__(self, parse_table: ParseTableBase[StateT], callbacks: ParserCallbacks, start: str, tags: List[Optional[str]]):
+        self.parse_table = parse_table
+
+        self.start_state = self.parse_table.start_states[start]
+        self.end_state = self.parse_table.end_states[start]
+        self.states = self.parse_table.states
+
+        self.callbacks = callbacks
+        self.start = start
+        self.tags = tags
+
+
 class ParserState(Generic[StateT]):
     __slots__ = 'parse_conf', 'lexer', 'state_stack', 'value_stack'
 
@@ -108,25 +133,90 @@ class ParserState(Generic[StateT]):
 
                 if is_end and state_stack[-1] == end_state:
                     return value_stack[-1]
-    
-    def _get_nth_last_token(self, n: int) -> Tuple[int, Optional[Token]]:
-        for i, value in enumerate(reversed(self.value_stack)):
-            if isinstance(value, Token):
-                if n == 0:
-                    return i, value
-                n -= 1
+
+class TagParserState(ParserState[StateT]):
+
+    def __init__(self, parse_conf: TagParseConf[StateT], lexer: LexerThread, state_stack=None, value_stack=None):
+        self.parse_conf = parse_conf
+        self.lexer = lexer
+        self.state_stack = state_stack or [(self.parse_conf.start_state, 0)]
+        self.value_stack = value_stack or []
+
+    @property
+    def position(self) -> StateT:
+        return self.state_stack[-1][0]
+
+    def feed_token(self, token: Token, is_end=False) -> Any:
+        state_stack = self.state_stack
+        value_stack = self.value_stack
+        states = self.parse_conf.states
+        end_state = self.parse_conf.end_state
+        callbacks = self.parse_conf.callbacks
+        
+
+        while True:
+            state, tokens = state_stack[-1]
+            try:
+                action, arg = states[state][token.type]
+            except KeyError:
+                expected = {s for s in states[state].keys() if s.isupper()}
+                raise UnexpectedToken(token, expected, state=self, interactive_parser=None)
+
+            assert arg != end_state
+
+            if action is Shift:
+                # shift once and return
+                assert not is_end
+                state_stack.append((arg, 1))
+                value_stack.append(0)
+                return
             else:
-                n, token = value._get_nth_last_leaf(n)
-                if token is not None:
-                    return i, token
-        return -1, None
+                # reduce+shift as many times as necessary
+                rule = arg
+                size = len(rule.expansion)
+                if size:
+                    s = state_stack[-size:]
+                    del state_stack[-size:]
+                else:
+                    s = []
+                
+                token_sum = 0
+                for _, t in s:
+                    token_sum += t
+                if token_sum:
+                    v = value_stack[-token_sum:]
+                    del value_stack[-token_sum:]
+                else:
+                    v = []
+                    
+                value = callbacks[rule](v, s) if callbacks else v
+
+                _action, new_state = states[state_stack[-1][0]][rule.origin.name]
+                assert _action is Shift
+                state_stack.append((new_state, token_sum))
+                value_stack.extend(value)
+
+                if is_end and state_stack[-1][0] == end_state:
+                    return value_stack[-1]
+    
+    def _get_nth_last_token(self, n: int) -> int:
+        n = n + 1
+        token_sum = 0
+        for i, (_, tokens) in enumerate(reversed(self.state_stack)):
+            token_sum += tokens
+            if token_sum >= n:
+                return i
+        return -1
 
     def _stack_traverse(self, idx: int, target: str, visited: Set[str]) -> Tuple[Set[Optional[str]], Set[str]]:
         # TODO: make this more efficient - graph version?
         if idx == len(self.state_stack):
             return set(), visited
         _idx = -(idx + 1)
-        states = self.state_stack[_idx]
+        states, _ = self.state_stack[_idx]
+        if isinstance(states, int):
+            states = self.parse_conf.parse_table.idx_to_state[states]
+        
         possible_tags = set()
         found_same_depth = False
 
@@ -156,10 +246,16 @@ class ParserState(Generic[StateT]):
 
     def _get_possible_tag_from_state(self, idx: int) -> Set[Optional[str]]:
         _idx = -(idx + 1)
-        value = self.value_stack[_idx]
-        root = value.type if isinstance(value, Token) else value.data
+        states, _ = self.state_stack[_idx]
+        if isinstance(states, int):
+            states = self.parse_conf.parse_table.idx_to_state[states]
+        root = None
+        for state in states:
+            if state.index > 0:
+                root = state.rule.expansion[state.index - 1].name
+                break
+        assert root is not None
         visited = set()
-        states = self.state_stack[_idx]
         possible_tags = set()
         for state in states:
             ptr = state.index
@@ -183,12 +279,14 @@ class ParserState(Generic[StateT]):
 
 
     def get_nth_last_token_tag(self, n: int) -> Set[Optional[str]]:
-        value_idx, token = self._get_nth_last_token(n)
-        if isinstance(token, Token) or token.is_undecided:
-            return self._get_possible_tag_from_state(value_idx)
-        elif isinstance(token, TagToken): # value is TagTree
-            return {token.tag}
+        if idx := self.value_stack[-(n+1)]:
+            tags = {self.parse_conf.tags[idx]}
+        else:
+            idx = self._get_nth_last_token(n)
+            if idx == -1:
+                return set()
+            tags = self._get_possible_tag_from_state(idx)
+        return tags
 
-        return set()
 
 ###}
