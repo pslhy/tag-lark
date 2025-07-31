@@ -2,15 +2,15 @@
 """
 # Author: Erez Shinan (2017)
 # Email : erezshin@gmail.com
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from ..lexer import Token, LexerThread
 from ..utils import Serialize
-from ..common import ParserConf, ParserCallbacks
+from ..common import ParserConf, TagParserConf, ParserCallbacks
 
 from .lalr_analysis import LALR_Analyzer, IntParseTable, ParseTableBase
 from .lalr_interactive_parser import InteractiveParser
 from lark.exceptions import UnexpectedCharacters, UnexpectedInput, UnexpectedToken
-from .lalr_parser_state import ParserState, ParseConf
+from .lalr_parser_state import ParserState, ParseConf, TagParserState, TagParseConf
 
 ###{standalone
 
@@ -69,6 +69,22 @@ class LALR_Parser(Serialize):
                 except UnexpectedCharacters as e2:
                     e = e2
 
+class TagLALR_Parser(LALR_Parser):
+    def __init__(self, parser_conf: TagParserConf, debug: bool=False, strict: bool=False):
+        analysis = LALR_Analyzer(parser_conf, debug=debug, strict=strict)
+        analysis.compute_lalr()
+        callbacks = parser_conf.callbacks
+
+        self._parse_table = analysis.parse_table
+        self.parser_conf = parser_conf
+        self.parser = _TagParser(analysis.parse_table, callbacks, parser_conf.tags, debug)
+
+    @classmethod
+    def deserialize(cls, data, memo, callbacks, tags, debug=False):
+        inst = cls.__new__(cls)
+        inst._parse_table = IntParseTable.deserialize(data, memo)
+        inst.parser = _TagParser(inst._parse_table, callbacks, tags, debug)
+        return inst
 
 class _Parser:
     parse_table: ParseTableBase
@@ -119,4 +135,24 @@ class _Parser:
                 print("")
 
             raise
+
+class _TagParser(_Parser):
+    parse_table: ParseTableBase
+    callbacks: ParserCallbacks
+    debug: bool
+    tags: List[Optional[str]]
+
+    def __init__(self, parse_table: ParseTableBase, callbacks: ParserCallbacks, tags: List[Optional[str]], debug: bool=False):
+        self.parse_table = parse_table
+        self.callbacks = callbacks
+        self.tags = tags
+        self.debug = debug
+
+    def parse(self, lexer: LexerThread, start: str, value_stack=None, state_stack=None, start_interactive=False):
+        parse_conf = TagParseConf(self.parse_table, self.callbacks, start, self.tags)
+        parser_state = TagParserState(parse_conf, lexer, state_stack, value_stack)
+        if start_interactive:
+            return InteractiveParser(self, parser_state, parser_state.lexer)
+        return self.parse_from_state(parser_state)
+
 ###}
