@@ -19,10 +19,10 @@ from .exceptions import ConfigurationError, assert_config, UnexpectedInput
 from .utils import Serialize, SerializeMemoizer, FS, logger, TextOrSlice
 from .load_grammar import load_grammar, FromPackageLoader, Grammar, verify_used_files, PackageResource, sha256_digest
 from .tree import Tree, TagTree
-from .common import LexerConf, ParserConf, _ParserArgType, _LexerArgType
+from .common import LexerConf, ParserConf, TagParserConf, _ParserArgType, _LexerArgType
 
 from .lexer import Lexer, BasicLexer, TerminalDef, LexerThread, Token
-from .parse_tree_builder import ParseTreeBuilder
+from .parse_tree_builder import ParseTreeBuilder, TagParseTreeBuilder
 from .parser_frontends import _validate_frontend_args, _get_lexer_callbacks, _deserialize_parsing_frontend, _construct_parsing_frontend
 from .grammar import Rule
 
@@ -267,6 +267,7 @@ class Lark(Serialize):
     lexer: Lexer
     parser: 'ParsingFrontend'
     terminals: Collection[TerminalDef]
+    tags: List[Optional[str]]
 
     def __init__(self, grammar: 'Union[Grammar, str, IO[str]]', **options) -> None:
         self.options = LarkOptions(options)
@@ -472,21 +473,30 @@ class Lark(Serialize):
         self._callbacks = {}
         # we don't need these callbacks if we aren't building a tree
         if self.options.ambiguity != 'forest':
-            self._parse_tree_builder = ParseTreeBuilder(
-                    self.rules,
-                    self.options.tree_class or Tree,
-                    self.options.propagate_positions,
-                    self.options.parser != 'lalr' and self.options.ambiguity == 'explicit',
-                    self.options.maybe_placeholders,
-                    self.options.taglark
+            if self.options.taglark:
+                self._parse_tree_builder = TagParseTreeBuilder(
+                        self.rules,
+                        self.grammar.tag_defs
                 )
+            else:
+                self._parse_tree_builder = ParseTreeBuilder(
+                        self.rules,
+                        self.options.tree_class or Tree,
+                        self.options.propagate_positions,
+                        self.options.parser != 'lalr' and self.options.ambiguity == 'explicit',
+                        self.options.maybe_placeholders
+                    )
             self._callbacks = self._parse_tree_builder.create_callback(self.options.transformer)
         self._callbacks.update(_get_lexer_callbacks(self.options.transformer, self.terminals))
 
     def _build_parser(self) -> "ParsingFrontend":
         self._prepare_callbacks()
         _validate_frontend_args(self.options.parser, self.options.lexer)
-        parser_conf = ParserConf(self.rules, self._callbacks, self.options.start)
+        parser_conf = (
+            ParserConf(self.rules, self._callbacks, self.options.start) 
+            if not self.options.taglark else 
+            TagParserConf(self.rules, self._callbacks, self.options.start, list(self.grammar.tag_defs))
+        )
         return _construct_parsing_frontend(
             self.options.parser,
             self.options.lexer,
