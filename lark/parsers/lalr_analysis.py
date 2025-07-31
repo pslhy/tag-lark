@@ -92,7 +92,12 @@ class IntParseTable(ParseTableBase[int]):
 
         start_states = {start:state_to_idx[s] for start, s in parse_table.start_states.items()}
         end_states = {start:state_to_idx[s] for start, s in parse_table.end_states.items()}
-        return cls(int_states, start_states, end_states)
+        parse_table = cls(int_states, start_states, end_states)
+        setattr(parse_table,
+            'idx_to_state',
+            {v:k for k, v in state_to_idx.items()}
+        )
+        return parse_table
 
 ###}
 
