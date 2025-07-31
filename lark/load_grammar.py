@@ -9,7 +9,7 @@ from copy import copy, deepcopy
 import pkgutil
 from ast import literal_eval
 from contextlib import suppress
-from typing import List, Tuple, Union, Callable, Dict, Optional, Sequence, Generator
+from typing import List, Tuple, Union, Callable, Dict, Optional, Sequence, Generator, Set
 
 from .utils import bfs, logger, classify_bool, is_id_continue, is_id_start, bfs_all_unique, small_factors, OrderedSet
 from .lexer import Token, TerminalDef, PatternStr, PatternRE, Pattern
@@ -727,6 +727,7 @@ class Grammar:
 
     term_defs: List[Tuple[str, Tuple[Tree, int]]]
     rule_defs: List[Tuple[str, Tuple[str, ...], Tree, RuleOptions]]
+    tag_defs: Set[Optional[str]] = {None}
     ignore: List[str]
 
     def __init__(self, rule_defs: List[Tuple[str, Tuple[str, ...], Tree, RuleOptions]], term_defs: List[Tuple[str, Tuple[Tree, int]]], ignore: List[str]) -> None:
@@ -805,7 +806,7 @@ class Grammar:
             for i, (expansion, alias) in enumerate(expansions):
                 if alias and name.startswith('_'):
                     raise GrammarError("Rule %s is marked for expansion (it starts with an underscore) and isn't allowed to have aliases (alias=%s)"% (name, alias))
-
+                
                 empty_indices = tuple(x==_EMPTY for x in expansion)
                 if any(empty_indices):
                     exp_options = copy(options) or RuleOptions()
@@ -819,6 +820,8 @@ class Grammar:
                     if sym.is_term and exp_options and exp_options.keep_all_tokens:
                         assert isinstance(sym, Terminal)
                         sym.filter_out = False
+                    if (isinstance(sym, TagNonTerminal) or isinstance(sym, TagTerminal)) and not sym.is_parameter:
+                        self.tag_defs.add(sym.tag)
                 rule = Rule(NonTerminal(name), expansion, i, alias, exp_options)
                 compiled_rules.append(rule)
 
