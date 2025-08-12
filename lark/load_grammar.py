@@ -167,6 +167,8 @@ RULES = {
 
     'template_usage': ['nonterminal _LBRACE _template_args _RBRACE'],
     '_template_args': ['value',
+                       'tag_usage',
+                       'tag_call'
                        '_template_args _COMMA value'],
 
     'term': ['TERMINAL _COLON expansions _NL',
@@ -510,7 +512,13 @@ class _ReplaceSymbols(Transformer_InPlace):
 
     def value(self, c):
         if len(c) == 1 and isinstance(c[0], Symbol) and c[0].name in self.names:
-            return self.names[c[0].name]
+            symbol = self.names[c[0].name]
+            if isinstance(symbol, TagTerminal) or isinstance(symbol, TagNonTerminal):
+                symbol = copy(symbol)
+                symbol.is_parameter = True
+                symbol.tag = None
+            return symbol
+
         return self.__default__('value', c, None)
 
     def template_usage(self, c):
@@ -568,15 +576,29 @@ class ApplyTemplates(Transformer_InPlace):
     def template_usage(self, c):
         name = c[0].name
         args = c[1:]
+        args_tag = [arg.tag for arg in args if isinstance(arg, (TagTerminal, TagNonTerminal))]
         result_name = "%s{%s}" % (name, ",".join(a.name for a in args))
         if result_name not in self.created_templates:
             self.created_templates.add(result_name)
             (_n, params, tree, options) ,= (t for t in self.rule_defs if t[0] == name)
             assert len(params) == len(args), args
+            assert len(args_tag) == 0 or not options.is_tag_rule, "Cannot use tags in a template that is a tag rule: %s" % result_name
             result_tree = deepcopy(tree)
             self.replacer.names = dict(zip(params, args))
             self.replacer.transform(result_tree)
             self.rule_defs.append((result_name, [], result_tree, deepcopy(options)))
+        if len(args_tag) > 0:
+            resp_tag = args_tag[0]
+            all_same_tag = all(tag == resp_tag for tag in args_tag)
+            assert all_same_tag, "All tags in a template must be the same, got: %s" % args_tag
+            
+            symbol = TagNonTerminal(result_name)
+            if resp_tag is not None:
+                symbol.tag = resp_tag
+                symbol.is_parameter = False
+            return symbol
+
+
         return NonTerminal(result_name)
 
 
