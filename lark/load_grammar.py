@@ -168,7 +168,7 @@ RULES = {
     'template_usage': ['nonterminal _LBRACE _template_args _RBRACE'],
     '_template_args': ['value',
                        'tag_usage',
-                       'tag_call'
+                       'tag_call',
                        '_template_args _COMMA value'],
 
     'term': ['TERMINAL _COLON expansions _NL',
