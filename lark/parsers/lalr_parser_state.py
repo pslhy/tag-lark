@@ -145,7 +145,6 @@ class TagParserState(ParserState[StateT]):
         self.value_stack = value_stack or []
         
         self.map_cache = dict()
-        self.temp_cache = defaultdict(dict)
 
     @property
     def position(self) -> StateT:
@@ -278,34 +277,28 @@ class TagParserState(ParserState[StateT]):
         
         state_map = self.get_state_map_index_of(idx)
 
-        if tg_sym.isupper():
+        if tg_sym.isupper(): # is terminal?
             for ruleptr in state_map.repr_ruleptr:
                 ptr = ruleptr.index
                 sym = ruleptr.rule.expansion[ptr-1].name
+                # check if target_symbol is equals to represent_symbol of current state-map.
                 return sym == tg_sym
 
-        goals = self.temp_cache[idx]
         for ruleptr in state_map.repr_ruleptr:
             rule_name = str(ruleptr.rule.origin.name)
-            if rule_name in goals:
-                goal = goals[rule_name]
-                if len(goal) == 0:
+            ptr = ruleptr.index
+            if idx > 0 and ptr >= len(ruleptr.rule.expansion): # almost-reduce check
+                continue
+            elif ptr > 1: # shift-from-past check
+                sym = ruleptr.rule.expansion[ptr-1].name
+                if tg_sym != sym:
                     continue
-            else:
-                ptr = ruleptr.index
-                if idx > 0 and ptr >= len(ruleptr.rule.expansion):
-                    continue
-                elif ptr > 1:
-                    sym = ruleptr.rule.expansion[ptr-1].name
-                    if tg_sym != sym:
-                        continue
-                    return True
-                new_tg_sym = ruleptr.rule.expansion[ptr].name if ptr < len(ruleptr.rule.expansion) else None
-                if not self.can_reduce(new_tg_sym, idx - 1):
-                    continue
+                return True
+            new_tg_sym = ruleptr.rule.expansion[ptr].name if ptr < len(ruleptr.rule.expansion) else None
+            if not self.can_reduce(new_tg_sym, idx - 1): # can future symbol be reduced? -> if so, current ruleptr can be reduced.
+                continue
                 
-            if self.parent_check(tg_sym, idx + 1, rule_name):
-                self.temp_cache[idx] = goals
+            if self.parent_check(tg_sym, idx + 1, rule_name): # does reducing current ruleptr affect to target symbol?
                 return True
 
         return False
@@ -332,15 +325,18 @@ class TagParserState(ParserState[StateT]):
             rule = state.rule
             prev_sym = rule.expansion[ptr - 1]
             if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rule.expansion[ptr].name, idx_tmp - 1)):
+                # can a ruleptr be reduced in not top-element of state stack? -> False
                 continue
             if prev_sym.name != root:
                 assert False, f"INVARIANT FAILED: Expected {root}, got {prev_sym.name}"
-            if not getattr(prev_sym, 'is_parameter', False):
+            if not getattr(prev_sym, 'is_parameter', False): # SHORTCUT : clear tag
                 possible_tags.add(getattr(prev_sym, 'tag', None))
-            else:
+            else: # tag is not clear (by param. passing)
                 par_rule = str(rule.origin.name)
                 idx_tmp = idx
                 state_map = self.get_state_map_index_of(idx_tmp)
+                
+                # get roots-of-the-rule in current index of state-stack : goal
                 goal, tags, is_end = state_map.get_roots(par_rule, use_tag_edges=True)
                 for tag, _ in tags:
                     possible_tags.add(tag)
@@ -351,11 +347,13 @@ class TagParserState(ParserState[StateT]):
                     goal = set()
                     is_end = True
                     for leaf in prev_goal:
-                        goal, tags, is_tmp_end = state_map.get_roots(leaf, visited=set(goal), use_tag_edges=True) 
+                        tmp_goal, tags, is_tmp_end = state_map.get_roots(leaf, use_tag_edges=True) 
                         is_end = is_tmp_end and is_end
                         for tag, sym in tags:
                             if self.can_reduce(sym, idx_tmp - 1):
                                 possible_tags.add(tag)
+                        for tmp_g in tmp_goal:
+                            goal.add(tmp_g)
                                 
 
         return possible_tags
@@ -363,7 +361,6 @@ class TagParserState(ParserState[StateT]):
 
 
     def get_nth_last_token_tag(self, n: int) -> Set[Optional[str]]:
-        self.temp_cache.clear()
         if idx := self.value_stack[-(n+1)]:
             tags = {self.parse_conf.tags[idx]}
         else:
