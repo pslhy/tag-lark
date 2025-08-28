@@ -250,7 +250,7 @@ class EBNF_to_BNF(Transformer_InPlace):
         return new_name
 
     def _add_rule(self, key, name, expansions):
-        t = NonTerminal(name) if not self.rule_options.is_tag_rule else TagNonTerminal(name)
+        t = NonTerminal(name) if not self.rule_options.is_tag_rule else TagNonTerminal(name, is_parameter=True)
         self.new_rules.append((name, expansions, self.rule_options))
         self.rules_cache[key] = t
         return t
@@ -258,10 +258,10 @@ class EBNF_to_BNF(Transformer_InPlace):
     def _add_recurse_rule(self, type_: str, expr: Tree):
         try:
             name = self.rules_cache[expr].name
-            return NonTerminal(name) if (not self.rule_options) or not self.rule_options.is_tag_rule else TagNonTerminal(name)
+            return NonTerminal(name) if (not self.rule_options) or not self.rule_options.is_tag_rule else TagNonTerminal(name, is_parameter=True)
         except KeyError:
             new_name = self._name_rule(type_)
-            t = NonTerminal(new_name) if (not self.rule_options) or not self.rule_options.is_tag_rule else TagNonTerminal(new_name)
+            t = NonTerminal(new_name) if (not self.rule_options) or not self.rule_options.is_tag_rule else TagNonTerminal(new_name, is_parameter=True)
             tree = ST('expansions', [
                 ST('expansion', [expr]),
                 ST('expansion', [t, expr])
