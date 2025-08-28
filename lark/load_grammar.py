@@ -250,17 +250,18 @@ class EBNF_to_BNF(Transformer_InPlace):
         return new_name
 
     def _add_rule(self, key, name, expansions):
-        t = NonTerminal(name)
+        t = NonTerminal(name) if not self.rule_options.is_tag_rule else TagNonTerminal(name)
         self.new_rules.append((name, expansions, self.rule_options))
         self.rules_cache[key] = t
         return t
 
     def _add_recurse_rule(self, type_: str, expr: Tree):
         try:
-            return self.rules_cache[expr]
+            name = self.rules_cache[expr].name
+            return NonTerminal(name) if (not self.rule_options) or not self.rule_options.is_tag_rule else TagNonTerminal(name)
         except KeyError:
             new_name = self._name_rule(type_)
-            t = NonTerminal(new_name)
+            t = NonTerminal(new_name) if (not self.rule_options) or not self.rule_options.is_tag_rule else TagNonTerminal(new_name)
             tree = ST('expansions', [
                 ST('expansion', [expr]),
                 ST('expansion', [t, expr])
@@ -804,7 +805,7 @@ class Grammar:
             i += 1
             if len(params) != 0:  # Dont transform templates
                 continue
-            rule_options = RuleOptions(keep_all_tokens=True) if options and options.keep_all_tokens else None
+            rule_options = RuleOptions(keep_all_tokens=options.keep_all_tokens, is_tag_rule=options.is_tag_rule) if options else None
             ebnf_to_bnf.rule_options = rule_options
             ebnf_to_bnf.prefix = name
             anon_tokens_transf.rule_options = rule_options
@@ -1450,7 +1451,10 @@ class GrammarBuilder:
 
             is_tag_used = (d.tag is None)
             for temp in exp.find_data('tag_usage'):
-                sym = temp.children[0].children[0].name
+                if isinstance(temp.children[0].children[0], Tree):
+                    sym = temp.children[0].children[0].children[0].value
+                else:
+                    sym = temp.children[0].children[0].name
                 tag = temp.children[1].value
                 sym_def = self._definitions[sym]
                 if tag in self._definitions: 

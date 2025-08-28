@@ -1,9 +1,11 @@
 from copy import deepcopy, copy
+from collections import defaultdict
 from typing import Dict, Any, Generic, List, Tuple, Optional, Set
 from ..grammar import NonTerminal
 from ..lexer import Token, TagToken, LexerThread
 from ..common import ParserCallbacks
 
+from .grammar_analysis import StateMap
 from .lalr_analysis import Shift, ParseTableBase, StateT
 from lark.exceptions import UnexpectedToken
 
@@ -141,6 +143,9 @@ class TagParserState(ParserState[StateT]):
         self.lexer = lexer
         self.state_stack = state_stack or [(self.parse_conf.start_state, 0)]
         self.value_stack = value_stack or []
+        
+        self.map_cache = dict()
+        self.temp_cache = defaultdict(dict)
 
     @property
     def position(self) -> StateT:
@@ -208,40 +213,102 @@ class TagParserState(ParserState[StateT]):
                 return i
         return -1
 
-    def _stack_traverse(self, idx: int, target: str, visited: Set[str]) -> Tuple[Set[Optional[str]], Set[str]]:
-        # TODO: make this more efficient - graph version?
-        if idx == len(self.state_stack):
-            return set(), visited
+    # def _stack_traverse(self, idx: int, target: str, visited: Set[str]) -> Tuple[Set[Optional[str]], Set[str]]:
+    #     # TODO: make this more efficient - graph version?
+    #     print("Stack traverse:", idx, target, visited)
+    #     if idx == len(self.state_stack):
+    #         return set(), visited
+    #     _idx = -(idx + 1)
+    #     states, _ = self.state_stack[_idx]
+    #     if isinstance(states, int):
+    #         states = self.parse_conf.parse_table.idx_to_state[states]
+        
+    #     possible_tags = set()
+    #     found_same_depth = False
+
+    #     for state in states:
+    #         try:
+    #             nxt = state.next
+    #         except IndexError:
+    #             continue
+    #         rule_name = state.rule.origin.name
+    #         rule_name = str(rule_name)
+
+    #         if not isinstance(nxt, NonTerminal) or nxt.name != target or rule_name in visited:
+    #             continue
+    #         found_same_depth = True
+    #         if not getattr(nxt, 'is_parameter', False):
+    #             possible_tags.add(getattr(nxt, 'tag', None))
+    #             print(state)
+    #             print(possible_tags)
+    #         else:
+    #             visited.add(rule_name)
+    #             new_tags, visited = self._stack_traverse(idx, rule_name, visited)
+    #             if "OPEN" in new_tags:
+    #                 print("Found OPEN tag in", rule_name)
+    #             possible_tags.update(new_tags)
+            
+    #     if found_same_depth:
+    #         return possible_tags, visited
+    #     else:
+    #         return self._stack_traverse(idx + 1, target, visited)
+
+    def get_state_map_index_of(self, idx: int) -> int:
         _idx = -(idx + 1)
         states, _ = self.state_stack[_idx]
-        if isinstance(states, int):
-            states = self.parse_conf.parse_table.idx_to_state[states]
-        
-        possible_tags = set()
-        found_same_depth = False
-
-        for state in states:
-            try:
-                nxt = state.next
-            except IndexError:
-                continue
-            rule_name = state.rule.alias or state.rule.options.template_source or state.rule.origin.name
-            rule_name = str(rule_name)
-
-            if not isinstance(nxt, NonTerminal) or nxt.name != target or rule_name in visited:
-                continue
-            found_same_depth = True
-            if not getattr(nxt, 'is_parameter', False):
-                possible_tags.add(getattr(nxt, 'tag', None))
+        if self.map_cache.get(states) is None:
+            if isinstance(states, int):
+                real_states = self.parse_conf.parse_table.idx_to_state[states]
+                self.map_cache[states] = StateMap(real_states)
             else:
-                visited.add(rule_name)
-                new_tags, visited = self._stack_traverse(idx, rule_name, visited)
-                possible_tags.update(new_tags)
-            
-        if found_same_depth:
-            return possible_tags, visited
-        else:
-            return self._stack_traverse(idx + 1, target, visited)
+                self.map_cache[states] = StateMap(states)
+        return self.map_cache[states]
+
+    def parent_check(self, tg_sym: str, idx: int, leaf: str) -> bool:
+        state_map = self.get_state_map_index_of(idx)
+        
+        path = state_map.get_roots(leaf)    
+        if tg_sym in path:
+            return True
+        return False
+
+    def can_reduce(self, tg_sym: str, idx: int) -> bool:
+        if idx == -1:
+            return True
+        
+        state_map = self.get_state_map_index_of(idx)
+
+        if tg_sym.isupper():
+            for ruleptr in state_map.repr_ruleptr:
+                ptr = ruleptr.index
+                sym = ruleptr.rule.expansion[ptr-1].name
+                return sym == tg_sym
+
+        goals = self.temp_cache[idx]
+        for ruleptr in state_map.repr_ruleptr:
+            rule_name = str(ruleptr.rule.origin.name)
+            if rule_name in goals:
+                goal = goals[rule_name]
+                if len(goal) == 0:
+                    continue
+            else:
+                ptr = ruleptr.index
+                if idx > 0 and ptr >= len(ruleptr.rule.expansion):
+                    continue
+                elif ptr > 1:
+                    sym = ruleptr.rule.expansion[ptr-1].name
+                    if tg_sym != sym:
+                        continue
+                    return True
+                new_tg_sym = ruleptr.rule.expansion[ptr].name if ptr < len(ruleptr.rule.expansion) else None
+                if not self.can_reduce(new_tg_sym, idx - 1):
+                    continue
+                
+            if self.parent_check(tg_sym, idx + 1, rule_name):
+                self.temp_cache[idx] = goals
+                return True
+
+        return False
 
 
     def _get_possible_tag_from_state(self, idx: int) -> Set[Optional[str]]:
@@ -255,30 +322,48 @@ class TagParserState(ParserState[StateT]):
                 root = state.rule.expansion[state.index - 1].name
                 break
         assert root is not None
-        visited = set()
+
         possible_tags = set()
+        idx_tmp = idx
         for state in states:
             ptr = state.index
             if ptr == 0:
                 continue
             rule = state.rule
             prev_sym = rule.expansion[ptr - 1]
-            if prev_sym.name != root:
+            if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rule.expansion[ptr].name, idx_tmp - 1)):
                 continue
+            if prev_sym.name != root:
+                assert False, f"INVARIANT FAILED: Expected {root}, got {prev_sym.name}"
             if not getattr(prev_sym, 'is_parameter', False):
                 possible_tags.add(getattr(prev_sym, 'tag', None))
             else:
-                parent_rule = rule.alias or rule.options.template_source or rule.origin.name
-                parent_rule = str(parent_rule)
-                if parent_rule not in visited:
-                    visited.add(parent_rule)
-                    new_tags, visited = self._stack_traverse(idx, parent_rule, visited)
-                    possible_tags.update(new_tags)
+                par_rule = str(rule.origin.name)
+                idx_tmp = idx
+                state_map = self.get_state_map_index_of(idx_tmp)
+                goal, tags, is_end = state_map.get_roots(par_rule, use_tag_edges=True)
+                for tag, _ in tags:
+                    possible_tags.add(tag)
+                while not is_end:
+                    idx_tmp += 1
+                    state_map = self.get_state_map_index_of(idx_tmp)
+                    prev_goal = goal
+                    goal = set()
+                    is_end = True
+                    for leaf in prev_goal:
+                        goal, tags, is_tmp_end = state_map.get_roots(leaf, visited=set(goal), use_tag_edges=True) 
+                        is_end = is_tmp_end and is_end
+                        for tag, sym in tags:
+                            if self.can_reduce(sym, idx_tmp - 1):
+                                possible_tags.add(tag)
+                                
 
         return possible_tags
 
 
+
     def get_nth_last_token_tag(self, n: int) -> Set[Optional[str]]:
+        self.temp_cache.clear()
         if idx := self.value_stack[-(n+1)]:
             tags = {self.parse_conf.tags[idx]}
         else:

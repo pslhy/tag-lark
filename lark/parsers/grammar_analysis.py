@@ -1,12 +1,13 @@
 "Provides for superficial grammar analysis."
 
 from collections import Counter, defaultdict
-from typing import List, Dict, Iterator, FrozenSet, Set
+from typing import List, Dict, Iterator, FrozenSet, Set, Union
 
 from ..utils import bfs, fzset, classify, OrderedSet
 from ..exceptions import GrammarError
 from ..grammar import Rule, Terminal, NonTerminal, Symbol
 from ..common import ParserConf
+from ..lexer import Token
 
 
 class RulePtr:
@@ -47,6 +48,86 @@ class RulePtr:
 
 
 State = FrozenSet[RulePtr]
+
+class StateMap:
+
+    def __init__(self, state: State):
+        self.repr_sym = None
+        self.repr_ruleptr = []
+        self.back_edges = defaultdict(set)
+        self.outgoing = set()
+
+        for ruleptr in state:
+            ptr = ruleptr.index
+            rule = ruleptr.rule
+            par_rule = str(rule.origin.name)
+            if ptr > 0:
+                self.repr_ruleptr.append(ruleptr)
+                if ptr < len(rule.expansion):
+                    sym = rule.expansion[ptr]
+                    self.back_edges[sym.name].add((par_rule, ruleptr, True))
+                self.outgoing.add(par_rule)
+                if self.repr_sym is None:
+                    self.repr_sym = ruleptr.rule.expansion[ptr - 1]
+                elif self.repr_sym != ruleptr.rule.expansion[ptr - 1]:
+                    assert False, f"INVARIANT FAILED: Multiple representation symbols in state: {self.repr_sym}, {ruleptr.rule.expansion[ptr - 1]}"
+            elif len(rule.expansion) > 0:
+                nxt_sym = rule.expansion[0]
+                self.back_edges[nxt_sym.name].add((par_rule, ruleptr, False))
+                self.outgoing.add(par_rule)
+    
+    def get_roots(self, start: Union[Token, Rule, str], visited: Set[str] = None, use_tag_edges: bool = False) -> Set[str]:
+        if visited is None:
+            visited = set()
+        if isinstance(start, Token):
+            start = start.value
+        elif isinstance(start, Rule):
+            start = start.origin.name
+            start = str(start)
+        
+        visited.add(start)
+        queue = [start]
+        qidx = 0
+        goal = set()
+        tags = set()
+        is_end = True
+        is_missing = start not in self.outgoing
+        while not is_missing and qidx < len(queue):
+            cur = queue[qidx]
+            qidx += 1
+            if use_tag_edges:
+                if cur in self.back_edges:
+                    for parent, ruleptr, no_way_out in self.back_edges[cur]:
+                        rule = ruleptr.rule
+                        sym = rule.expansion[ruleptr.index]
+                        is_sym_parameter = getattr(sym, 'is_parameter', False)
+                        sym_tag = getattr(sym, 'tag', None)
+                        if not is_sym_parameter:
+                            tags.add((sym_tag, sym.name))
+                        if not (parent in visited) and is_sym_parameter:
+                            visited.add(parent)
+                            if not no_way_out:
+                                queue.append(parent)
+                            else:
+                                goal.add(parent)
+                                is_end = False
+                else:
+                    goal.add(cur)
+                    is_end = False
+            else:
+                if cur in self.back_edges:
+                    for parent, ruleptr, no_way_out in self.back_edges[cur]:
+                        if not (parent in visited):
+                            visited.add(parent)
+                            if not no_way_out:
+                                queue.append(parent)
+                else:
+                    goal.add(cur)
+        if use_tag_edges:
+            return goal, tags, is_end
+        return visited
+        
+
 
 # state generation ensures no duplicate LR0ItemSets
 class LR0ItemSet:
