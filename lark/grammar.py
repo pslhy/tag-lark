@@ -80,7 +80,7 @@ class TagNonTerminal(NonTerminal):
         self.is_parameter = is_parameter
     
     def __repr__(self):
-        return 'NonTermianl(%r)@%r' % (self.name, self.tag if self.tag else "__param__")
+        return 'NonTerminal(%r)@%r' % (self.name, self.tag if self.tag else "__param__")
 
 class RuleOptions(Serialize):
     __serialize_fields__ = 'keep_all_tokens', 'expand1', 'priority', 'template_source', 'empty_indices', 'is_tag_rule'
