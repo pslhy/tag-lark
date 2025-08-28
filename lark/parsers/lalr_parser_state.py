@@ -172,7 +172,7 @@ class TagParserState(ParserState[StateT]):
                 # shift once and return
                 assert not is_end
                 state_stack.append((arg, 1))
-                value_stack.append(0)
+                value_stack.append(-1)
                 return
             else:
                 # reduce+shift as many times as necessary
@@ -211,46 +211,6 @@ class TagParserState(ParserState[StateT]):
             if token_sum >= n:
                 return i
         return -1
-
-    # def _stack_traverse(self, idx: int, target: str, visited: Set[str]) -> Tuple[Set[Optional[str]], Set[str]]:
-    #     # TODO: make this more efficient - graph version?
-    #     print("Stack traverse:", idx, target, visited)
-    #     if idx == len(self.state_stack):
-    #         return set(), visited
-    #     _idx = -(idx + 1)
-    #     states, _ = self.state_stack[_idx]
-    #     if isinstance(states, int):
-    #         states = self.parse_conf.parse_table.idx_to_state[states]
-        
-    #     possible_tags = set()
-    #     found_same_depth = False
-
-    #     for state in states:
-    #         try:
-    #             nxt = state.next
-    #         except IndexError:
-    #             continue
-    #         rule_name = state.rule.origin.name
-    #         rule_name = str(rule_name)
-
-    #         if not isinstance(nxt, NonTerminal) or nxt.name != target or rule_name in visited:
-    #             continue
-    #         found_same_depth = True
-    #         if not getattr(nxt, 'is_parameter', False):
-    #             possible_tags.add(getattr(nxt, 'tag', None))
-    #             print(state)
-    #             print(possible_tags)
-    #         else:
-    #             visited.add(rule_name)
-    #             new_tags, visited = self._stack_traverse(idx, rule_name, visited)
-    #             if "OPEN" in new_tags:
-    #                 print("Found OPEN tag in", rule_name)
-    #             possible_tags.update(new_tags)
-            
-    #     if found_same_depth:
-    #         return possible_tags, visited
-    #     else:
-    #         return self._stack_traverse(idx + 1, target, visited)
 
     def get_state_map_index_of(self, idx: int) -> int:
         _idx = -(idx + 1)
@@ -304,7 +264,6 @@ class TagParserState(ParserState[StateT]):
 
         return False
 
-
     def _get_possible_tag_from_state(self, idx: int) -> Set[Optional[str]]:
         _idx = -(idx + 1)
         states, _ = self.state_stack[_idx]
@@ -357,7 +316,7 @@ class TagParserState(ParserState[StateT]):
 
 
     def get_nth_last_token_tag(self, n: int) -> Set[Optional[str]]:
-        if idx := self.value_stack[-(n+1)]:
+        if (idx := self.value_stack[-(n+1)]) >= 0:
             tags = {self.parse_conf.tags[idx]}
         else:
             idx = self._get_nth_last_token(n)

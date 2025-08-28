@@ -495,7 +495,7 @@ class Lark(Serialize):
         parser_conf = (
             ParserConf(self.rules, self._callbacks, self.options.start) 
             if not self.options.taglark else 
-            TagParserConf(self.rules, self._callbacks, self.options.start, list(self.grammar.tag_defs))
+            TagParserConf(self.rules, self._callbacks, self.options.start, self.grammar.tag_defs)
         )
         return _construct_parsing_frontend(
             self.options.parser,

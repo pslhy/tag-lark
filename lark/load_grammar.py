@@ -750,7 +750,7 @@ class Grammar:
 
     term_defs: List[Tuple[str, Tuple[Tree, int]]]
     rule_defs: List[Tuple[str, Tuple[str, ...], Tree, RuleOptions]]
-    tag_defs: Set[Optional[str]] = {None}
+    tag_defs: List[Optional[str]]
     ignore: List[str]
 
     def __init__(self, rule_defs: List[Tuple[str, Tuple[str, ...], Tree, RuleOptions]], term_defs: List[Tuple[str, Tuple[Tree, int]]], ignore: List[str]) -> None:
@@ -821,6 +821,7 @@ class Grammar:
 
         simplify_rule = SimplifyRule_Visitor()
         compiled_rules: List[Rule] = []
+        tag_defs: Set[Optional[str]] = {None}
         for rule_content in rules:
             name, tree, options = rule_content
             simplify_rule.visit(tree)
@@ -844,10 +845,10 @@ class Grammar:
                         assert isinstance(sym, Terminal)
                         sym.filter_out = False
                     if (isinstance(sym, TagNonTerminal) or isinstance(sym, TagTerminal)) and not sym.is_parameter:
-                        self.tag_defs.add(sym.tag)
+                        tag_defs.add(sym.tag)
                 rule = Rule(NonTerminal(name), expansion, i, alias, exp_options)
                 compiled_rules.append(rule)
-
+        self.tag_defs = list(tag_defs)
         # Remove duplicates of empty rules, throw error for non-empty duplicates
         if len(set(compiled_rules)) != len(compiled_rules):
             duplicates = classify(compiled_rules, lambda x: x)

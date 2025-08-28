@@ -394,24 +394,19 @@ class TagApplier:
         self.rule = rule
         self.tag_dict = tag_dict
         self.expansion_tag = [
-            getattr(sym, 'tag', None) if not getattr(sym, 'is_parameter', False) else None for sym in rule.expansion
-        ]
-        self.is_tag_decider = any(self.expansion_tag) 
+            (getattr(sym, 'tag', None), getattr(sym, 'is_parameter', False)) for sym in rule.expansion
+        ] 
 
     def __call__(self, children, states):
-        rule = self.rule
-        if not self.is_tag_decider:
-            return children
         assert len(states) == len(self.expansion_tag), f"{self.rule.name} ({self.rule.expansion}) has {len(self.expansion_tag)} tags, but {len(states)} states"
-        
         anchor = 0
-        for (_, length), tag in zip(states, self.expansion_tag):
-            if tag is None:
+        for (_, length), (tag, param) in zip(states, self.expansion_tag):
+            if param:
                 anchor += length
                 continue
             tag_idx = self.tag_dict.get(tag)
             for i in range(anchor, anchor + length):
-                if children[i] > 0:
+                if children[i] >= 0:
                     continue
                 children[i] = tag_idx
 
@@ -420,7 +415,7 @@ class TagApplier:
 class TagParseTreeBuilder:
     def __init__(self, rules, tags):
         self.rules = rules
-        self.tags = list(tags)
+        self.tags = tags
 
     def create_callback(self, transformer=None):
         callbacks = {}
