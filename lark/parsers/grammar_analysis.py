@@ -73,7 +73,8 @@ class StateMap:
                     assert False, f"INVARIANT FAILED: Multiple representation symbols in state: {self.repr_sym}, {ruleptr.rule.expansion[ptr - 1]}"
             elif len(rule.expansion) > 0:
                 nxt_sym = rule.expansion[0]
-                self.back_edges[nxt_sym.name].add((par_rule, ruleptr, False))
+                no_way_out = par_rule.startswith('$root_')
+                self.back_edges[nxt_sym.name].add((par_rule, ruleptr, no_way_out))
                 self.outgoing.add(par_rule)
     
     def get_roots(self, start: Union[Token, Rule, str], visited: Set[str] = None, use_tag_edges: bool = False) -> Set[str]:
@@ -90,43 +91,36 @@ class StateMap:
         qidx = 0
         goal = set()
         tags = set()
-        is_end = True
         is_missing = start not in self.outgoing
         while not is_missing and qidx < len(queue):
             cur = queue[qidx]
+            assert cur in self.back_edges, f"INVARIANT FAILED: {cur} not in self.back_edges. no-way-out must handle this."
             qidx += 1
             if use_tag_edges:
-                if cur in self.back_edges:
-                    for parent, ruleptr, no_way_out in self.back_edges[cur]:
-                        rule = ruleptr.rule
-                        sym = rule.expansion[ruleptr.index]
-                        is_sym_parameter = getattr(sym, 'is_parameter', False)
-                        sym_tag = getattr(sym, 'tag', None)
-                        if not is_sym_parameter:
-                            tags.add((sym_tag, sym.name))
-                        if not (parent in visited) and is_sym_parameter:
-                            visited.add(parent)
-                            if not no_way_out:
-                                queue.append(parent)
-                            else:
-                                goal.add(parent)
-                                is_end = False
-                else:
-                    goal.add(cur)
-                    is_end = False
+                for parent, ruleptr, no_way_out in self.back_edges[cur]:
+                    rule = ruleptr.rule
+                    ptr = ruleptr.index
+                    sym = rule.expansion[ptr]
+
+                    is_sym_parameter = getattr(sym, 'is_parameter', False)
+                    sym_tag = getattr(sym, 'tag', None)
+                    if not is_sym_parameter:
+                        tags.add((sym_tag, sym.name))
+                    if not (parent in visited) and is_sym_parameter:
+                        visited.add(parent)
+                        if not no_way_out:
+                            queue.append(parent)
+                        else:
+                            goal.add((parent, ptr))
             else:
-                if cur in self.back_edges:
-                    for parent, ruleptr, no_way_out in self.back_edges[cur]:
-                        if not (parent in visited):
-                            visited.add(parent)
-                            if not no_way_out:
-                                queue.append(parent)
-                else:
-                    goal.add(cur)
+                for parent, ruleptr, no_way_out in self.back_edges[cur]:
+                    if not (parent in visited):
+                        visited.add(parent)
+                        if not no_way_out:
+                            queue.append(parent)
         if use_tag_edges:
-            return goal, tags, is_end
+            return goal, tags
         return visited
-        
 
 
 # state generation ensures no duplicate LR0ItemSets

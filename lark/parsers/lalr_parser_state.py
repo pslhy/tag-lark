@@ -265,7 +265,8 @@ class TagParserState(ParserState[StateT]):
 
     def parent_check(self, tg_sym: str, idx: int, leaf: str) -> bool:
         state_map = self.get_state_map_index_of(idx)
-        
+        if leaf == tg_sym:
+            return True
         path = state_map.get_roots(leaf)    
         if tg_sym in path:
             return True
@@ -317,14 +318,13 @@ class TagParserState(ParserState[StateT]):
         assert root is not None
 
         possible_tags = set()
-        idx_tmp = idx
         for state in states:
             ptr = state.index
             if ptr == 0:
                 continue
             rule = state.rule
             prev_sym = rule.expansion[ptr - 1]
-            if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rule.expansion[ptr].name, idx_tmp - 1)):
+            if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rule.expansion[ptr].name, idx - 1)):
                 # can a ruleptr be reduced in not top-element of state stack? -> False
                 continue
             if prev_sym.name != root:
@@ -333,27 +333,23 @@ class TagParserState(ParserState[StateT]):
                 possible_tags.add(getattr(prev_sym, 'tag', None))
             else: # tag is not clear (by param. passing)
                 par_rule = str(rule.origin.name)
-                idx_tmp = idx
-                state_map = self.get_state_map_index_of(idx_tmp)
-                
-                # get roots-of-the-rule in current index of state-stack : goal
-                goal, tags, is_end = state_map.get_roots(par_rule, use_tag_edges=True)
-                for tag, _ in tags:
-                    possible_tags.add(tag)
-                while not is_end:
-                    idx_tmp += 1
-                    state_map = self.get_state_map_index_of(idx_tmp)
-                    prev_goal = goal
-                    goal = set()
-                    is_end = True
-                    for leaf in prev_goal:
-                        tmp_goal, tags, is_tmp_end = state_map.get_roots(leaf, use_tag_edges=True) 
-                        is_end = is_tmp_end and is_end
+                queue_depth = defaultdict(set)
+                depth = ptr
+                max_depth = depth
+                queue_depth[ptr].add(par_rule) # don't need to call get_roots() - if ptr > 0, already root
+
+                while depth <= max_depth:
+                    state_map = self.get_state_map_index_of(idx + depth)
+                    for leaf in queue_depth[depth]:
+                        goals, tags =  state_map.get_roots(leaf, use_tag_edges=True)
                         for tag, sym in tags:
-                            if self.can_reduce(sym, idx_tmp - 1):
+                            if self.can_reduce(sym, idx + depth - 1):
                                 possible_tags.add(tag)
-                        for tmp_g in tmp_goal:
-                            goal.add(tmp_g)
+                        for goal, dep in goals:
+                            nxt_depth = depth + dep
+                            max_depth = max(nxt_depth, max_depth)
+                            queue_depth[nxt_depth].add(goal)
+                    depth += 1
                                 
 
         return possible_tags
