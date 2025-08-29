@@ -114,7 +114,7 @@ RULES = {
 
     '?rules': ['rule', 'tag_rule'],
     'rule': ['rule_modifiers RULE template_params priority _COLON expansions _NL'],
-    'tag_rule' : ['rule_modifiers RULE template_params _AT tag_param priority _COLON expansions _NL'],
+    'tag_rule' : ['rule_modifiers RULE template_params _AT tag_arg priority _COLON expansions _NL'],
     'rule_modifiers': ['RULE_MODIFIERS',
                        ''],
     'priority': ['_DOT NUMBER',
@@ -142,7 +142,7 @@ RULES = {
     '?atom': ['_LPAR expansions _RPAR',
               'maybe',
               'value',
-              'tag_call',
+              'tag_param',
               'tag_usage'],
 
     'value': ['terminal',
@@ -152,8 +152,8 @@ RULES = {
               'template_usage'],
     
     '?tag': ['TERMINAL'],
-    '?tag_param': ['RULE'],
-    'tag_call': ['value _AT tag_param'],
+    '?tag_arg': ['RULE'],
+    'tag_param': ['value _AT tag_arg'],
     'tag_usage': ['value _AT tag'],
 
     'terminal': ['TERMINAL'],
@@ -168,7 +168,7 @@ RULES = {
     'template_usage': ['nonterminal _LBRACE _template_args _RBRACE'],
     '_template_args': ['value',
                        'tag_usage',
-                       'tag_call',
+                       'tag_param',
                        '_template_args _COMMA value'],
 
     'term': ['TERMINAL _COLON expansions _NL',
@@ -529,7 +529,7 @@ class _ReplaceSymbols(Transformer_InPlace):
         return self.__default__('template_usage', c, None)
 
 class PrepareTag(Transformer_InPlace):
-    def tag_call(self, c):
+    def tag_param(self, c):
         assert len(c) == 2
         sym, tag_token = c
         if isinstance(sym, Terminal):
@@ -997,7 +997,7 @@ def _find_used_symbols(tree):
 def _find_used_symbols_not_by_tag(tree):
     assert tree.data == 'expansions'
     return {t.name for x in tree.find_data('expansion')
-            for t in x.scan_tree(lambda t: getattr(t, 'data', None) not in ['tag_usage', 'tag_call'], lambda t: isinstance(t, Symbol))}
+            for t in x.scan_tree(lambda t: getattr(t, 'data', None) not in ['tag_usage', 'tag_param'], lambda t: isinstance(t, Symbol))}
 
 def _get_parser():
     try:
@@ -1463,7 +1463,7 @@ class GrammarBuilder:
                 if not sym_def.is_term and sym_def.tag is None:
                     raise GrammarError("Tag %s used in rule `%s` (in rule `%s`) but not defined" % (tag, sym, name))
 
-            for temp in exp.find_data('tag_call'):
+            for temp in exp.find_data('tag_param'):
                 if isinstance(temp.children[0].children[0], Tree):
                     sym = temp.children[0].children[0].children[0].value
                 else:
