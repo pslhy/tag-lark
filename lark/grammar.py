@@ -72,15 +72,22 @@ class NonTerminal(Symbol):
     is_term: ClassVar[bool] = False
 
 class TagNonTerminal(NonTerminal):
-    __serialize_fields__ = 'name', 'tag'
+    __serialize_fields__ = 'name', 'tag', 'rule_tag'
     
-    def __init__(self, name: str, tag: Optional[str] = None, is_parameter : bool = False) -> None:
+    def __init__(self, name: str, tag: Optional[str] = None, is_parameter : bool = False, rule_tag: Optional[str] = None) -> None:
         super().__init__(name)
         self.tag = tag
+        self.rule_tag = rule_tag
         self.is_parameter = is_parameter
     
     def __repr__(self):
-        return 'NonTerminal(%r)@%r' % (self.name, self.tag if self.tag else "__param__")
+        term_tag = ""
+        if self.tag is not None:
+            term_tag = '@' + self.tag
+        elif self.is_parameter:
+            term_tag = '@' + '__param__'
+        rule_tag = "" if self.rule_tag is None else '#' + self.rule_tag
+        return 'NonTerminal(%r)' % (self.name) + term_tag + rule_tag
 
 class RuleOptions(Serialize):
     __serialize_fields__ = 'keep_all_tokens', 'expand1', 'priority', 'template_source', 'empty_indices', 'is_tag_rule'

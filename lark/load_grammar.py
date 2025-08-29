@@ -82,6 +82,7 @@ TERMINALS = {
     '_RBRACE': r'\}',
     'OP': '[+*]|[?](?![a-z_])',
     '_AT': '@',
+    '_HASH': '%',
     '_COLON': ':',
     '_COMMA': ',',
     '_OR': r'\|',
@@ -143,7 +144,8 @@ RULES = {
               'maybe',
               'value',
               'tag_param',
-              'tag_usage'],
+              'tag_usage',
+              'rule_tag'],
 
     'value': ['terminal',
               'nonterminal',
@@ -155,6 +157,9 @@ RULES = {
     '?tag_arg': ['RULE'],
     'tag_param': ['value _AT tag_arg'],
     'tag_usage': ['value _AT tag'],
+    'rule_tag': ['value _HASH tag',
+                 'tag_param _HASH tag',
+                 'tag_usage _HASH tag'],
 
     'terminal': ['TERMINAL'],
     'nonterminal': ['RULE'],
@@ -550,7 +555,9 @@ class PrepareTag(Transformer_InPlace):
     def tag_usage(self, c):
         assert len(c) == 2
         sym, tag_token = c
-        if isinstance(sym, Terminal):
+        if getattr(sym, 'tag', None) is not None: # may cause by template-rule
+            assert False
+        elif isinstance(sym, Terminal):
             tagged_sym = TagTerminal(
                 sym.name,
                 sym.filter_out,
@@ -565,6 +572,29 @@ class PrepareTag(Transformer_InPlace):
             assert False, sym
         return tagged_sym
 
+class PrepareRuleTag(Transformer_InPlace):
+    def rule_tag(self, c):
+        assert len(c) == 2
+        sym, tag_token = c
+        print(sym, tag_token)
+        if isinstance(sym, TagNonTerminal):
+            rule_tagged = TagNonTerminal(
+                sym.name,
+                tag = sym.tag,
+                is_parameter = sym.is_parameter,
+                rule_tag = tag_token.value
+            )
+        elif isinstance(sym, NonTerminal):
+            rule_tagged = TagNonTerminal(
+                sym.name,
+                rule_tag=tag_token.value
+            )
+        elif isinstance(sym, Terminal):
+            raise NotImplementedError(f"Terminal '{sym.name}' can be tagged by rule-tag '{tag_token.value}'.")
+        else:
+            assert False, sym
+        print(rule_tagged)
+        return rule_tagged
 
 class ApplyTemplates(Transformer_InPlace):
     """Apply the templates, creating new rules that represent the used templates"""
@@ -791,10 +821,12 @@ class Grammar:
 
         # 1.5. Pre-process tags
         transformer *= PrepareTag()
+        transformer *= PrepareRuleTag()
 
         # 2. Inline Templates
 
-        transformer *= ApplyTemplates(rule_defs)
+        # transformer *= ApplyTemplates(rule_defs)
+        apply_templates = ApplyTemplates(rule_defs)
 
         # 3. Convert EBNF to BNF (and apply step 1 & 2)
         ebnf_to_bnf = EBNF_to_BNF()
@@ -809,7 +841,13 @@ class Grammar:
             ebnf_to_bnf.rule_options = rule_options
             ebnf_to_bnf.prefix = name
             anon_tokens_transf.rule_options = rule_options
+            # print("---")
+            # print(name)
+            # print("ORIGIN", rule_tree)
             tree = transformer.transform(rule_tree)
+            # print("TAG", tree)
+            tree = apply_templates.transform(tree)
+            # print("APPLY", tree)
             res: Tree = ebnf_to_bnf.transform(tree)
             rules.append((name, res, options))
         rules += ebnf_to_bnf.new_rules
@@ -1157,7 +1195,7 @@ def _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions):
 
     if params is not None:
         params = [t.value for t in params.children]  # For the grammar parser
-
+    print("---\n", name +"\n", expansions)
     return name, params, expansions, RuleOptions(keep_all_tokens, expand1, priority=priority,
                                                  template_source=(name if params else None))
 
@@ -1482,6 +1520,7 @@ class GrammarBuilder:
             for temp in exp.find_data('template_usage'):
                 sym = temp.children[0].name
                 args = temp.children[1:]
+                # print(sym, args)
                 if sym not in params: # not a template parameter
                     if sym not in self._definitions: 
                         self._grammar_error(d.is_term, "Template '%s' used but not defined (in {type} {name})" % sym, name)
