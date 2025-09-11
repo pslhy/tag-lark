@@ -91,12 +91,13 @@ class TagParserConf(ParserConf):
     start: List[str]
     tags: List[Optional[str]]
 
-    def __init__(self, rules: List['Rule'], callbacks: ParserCallbacks, start: List[str], tags: List[Optional[str]]):
+    def __init__(self, rules: List['Rule'], callbacks: ParserCallbacks, start: List[str], tags: List[Optional[str]], rule_tags: List[Optional[str]]):
         assert isinstance(start, list)
         self.rules = rules
         self.callbacks = callbacks
         self.start = start
         self.tags = tags
+        self.rule_tags = rule_tags # TODO: will deprecate
 
 
 ###}

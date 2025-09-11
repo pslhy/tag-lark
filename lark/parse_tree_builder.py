@@ -390,38 +390,61 @@ class ParseTreeBuilder:
 
 
 class TagApplier:
-    def __init__(self, rule, tag_dict):
+    def __init__(self, rule, tag_dict, rule_tag_dict):
         self.rule = rule
+        # term_tag
         self.tag_dict = tag_dict
         self.expansion_tag = [
             (getattr(sym, 'tag', None), getattr(sym, 'is_parameter', False)) for sym in rule.expansion
-        ] 
+        ]
+        # rule_tag
+        self.rule_tag_dict = dict() # TODO
+        self.rule_tag = [
+            getattr(sym, 'rule_tag', None) for sym in rule.expansion
+        ]
 
     def __call__(self, children, states):
         assert len(states) == len(self.expansion_tag), f"{self.rule.name} ({self.rule.expansion}) has {len(self.expansion_tag)} tags, but {len(states)} states"
         anchor = 0
+
+        # term_tag
         for (_, length), (tag, param) in zip(states, self.expansion_tag):
             if param:
                 anchor += length
                 continue
             tag_idx = self.tag_dict.get(tag)
             for i in range(anchor, anchor + length):
-                if children[i] >= 0:
+                term_tag, rule_tag = children[i]
+                if term_tag >= 0:
                     continue
-                children[i] = tag_idx
+                children[i] = (tag_idx, rule_tag)
+            anchor += length
+
+        # rule_tag (TODO: will deprecate)
+        anchor = 0
+        for (_, length), rule_tag in zip(states, self.rule_tag):
+            tag_idx = self.rule_tag_dict.get(rule_tag)
+            for i in range(anchor, anchor + length):
+                term_tag, _ = children[i]
+                children[i] = (term_tag, tag_idx)
+            anchor += length
+
+        # TODO: make more efficient - one for loop
 
         return children
 
 class TagParseTreeBuilder:
-    def __init__(self, rules, tags):
+    def __init__(self, rules, tags, rule_tags):
         self.rules = rules
         self.tags = tags
+        self.rule_tags = rule_tags # TODO: will deprecate
 
     def create_callback(self, transformer=None):
         callbacks = {}
         tag_dict = {tag: i for i, tag in enumerate(self.tags)}
+        rule_tag_dict = {tag: i for i, tag in enumerate(self.rule_tags)} # TODO: will deprecate
         for rule in self.rules:
-            callbacks[rule] = TagApplier(rule, tag_dict)
+            callbacks[rule] = TagApplier(rule, tag_dict, rule_tag_dict)
         return callbacks
 
 ###}

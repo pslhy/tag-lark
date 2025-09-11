@@ -1,7 +1,7 @@
 from copy import deepcopy, copy
 from collections import defaultdict
 from typing import Dict, Any, Generic, List, Tuple, Optional, Set
-from ..grammar import NonTerminal
+from ..grammar import NonTerminal, TagNonTerminal
 from ..lexer import Token, TagToken, LexerThread
 from ..common import ParserCallbacks
 
@@ -172,7 +172,7 @@ class TagParserState(ParserState[StateT]):
                 # shift once and return
                 assert not is_end
                 state_stack.append((arg, 1))
-                value_stack.append(-1)
+                value_stack.append((-1, -1))
                 return
             else:
                 # reduce+shift as many times as necessary
@@ -212,7 +212,7 @@ class TagParserState(ParserState[StateT]):
                 return i
         return -1
 
-    def get_state_map_index_of(self, idx: int) -> int:
+    def get_state_map_index_of(self, idx: int) -> StateMap:
         _idx = -(idx + 1)
         states, _ = self.state_stack[_idx]
         if self.map_cache.get(states) is None:
@@ -316,7 +316,7 @@ class TagParserState(ParserState[StateT]):
 
 
     def get_nth_last_token_tag(self, n: int) -> Set[Optional[str]]:
-        if (idx := self.value_stack[-(n+1)]) >= 0:
+        if (idx := self.value_stack[-(n+1)][0]) >= 0:
             tags = {self.parse_conf.tags[idx]}
         else:
             idx = self._get_nth_last_token(n)
@@ -325,5 +325,82 @@ class TagParserState(ParserState[StateT]):
             tags = self._get_possible_tag_from_state(idx)
         return tags
 
+    def _get_possible_stag_from_state(self, idx: int) -> Set[List[str]]:
+        _idx = -(idx + 1)
+        states, _ = self.state_stack[_idx]
+        if isinstance(states, int):
+            states = self.parse_conf.parse_table.idx_to_state[states]
+        root = None
+        for state in states:
+            if state.index > 0:
+                root = state.rule.expansion[state.index - 1].name
+                break
+        assert root is not None
+
+        possible_tags = set()
+        for state in states:
+            ptr = state.index
+            if ptr == 0:
+                continue
+            rule = state.rule
+            prev_sym = rule.expansion[ptr - 1]
+            if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rule.expansion[ptr].name, idx - 1)):
+                # can a ruleptr in not top-element of state stack be reduced? -> False
+                continue
+            if prev_sym.name != root:
+                assert False, f"INVARIANT FAILED: Expected {root}, got {prev_sym.name}"
+            
+            base = None
+            if isinstance(prev_sym, TagNonTerminal):
+                base = prev_sym.rule_tag
+            
+            if base is None:
+                base = tuple()
+            else:
+                base = tuple([base])
+            # print(state, base)
+            par_rule = str(rule.origin.name)
+            queue_depth = defaultdict(lambda: defaultdict(set))
+            depth = ptr
+            max_depth = depth
+            queue_depth[ptr][par_rule].add(base) # don't need to call get_roots() - if ptr > 0, already root
+
+            while depth <= max_depth:
+                # print("DEPTH:", depth, queue_depth[depth])
+                state_map = self.get_state_map_index_of(idx + depth)
+                for leaf, base_tag in queue_depth[depth].items():
+                    findings = state_map.find_rule_tag(leaf)
+                    for sym, stag, ptr in findings:
+                        # print("-", sym, stag, ptr)
+                        if self.can_reduce(sym, idx + depth - 1):
+                            # print(ptr > 0, ptr)
+                            if ptr > 0:
+                                nxt_depth = depth + ptr
+                                max_depth = max(nxt_depth, max_depth)
+                                # print(nxt_depth)
+                                for bt in base_tag:
+                                    queue_depth[nxt_depth][sym].add(tuple(list(bt) + list(stag)))
+                            else:
+                                for bt in base_tag:
+                                    possible_tags.add(tuple(list(bt) + list(stag)))                
+                depth += 1
+                                
+        return possible_tags
+
+
+    def get_nth_last_token_stag(self, n:int) -> Set[List[str]]:
+        # base = []
+        # if (rule_tag_idx := self.value_stack[-(n+1)][1]) >= 0:
+        #     base.append(
+        #         self.parse_conf.rule_tags[rule_tag_idx]
+        #     )
+        
+        idx = self._get_nth_last_token(n)
+        if idx == -1:
+            return set()
+        stags = self._get_possible_stag_from_state(idx)
+        stags = set(tuple(reversed(t)) for t in stags)
+        return stags
+            
 
 ###}

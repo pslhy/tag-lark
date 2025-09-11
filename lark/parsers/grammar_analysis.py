@@ -5,7 +5,7 @@ from typing import List, Dict, Iterator, FrozenSet, Set, Union
 
 from ..utils import bfs, fzset, classify, OrderedSet
 from ..exceptions import GrammarError
-from ..grammar import Rule, Terminal, NonTerminal, Symbol
+from ..grammar import Rule, Terminal, NonTerminal, Symbol, TagNonTerminal
 from ..common import ParserConf
 from ..lexer import Token
 
@@ -122,6 +122,44 @@ class StateMap:
             return goal, tags
         return visited
 
+    def find_rule_tag(self, start: Union[Token, Rule, str]):
+        visited = set()
+        
+        if isinstance(start, Token):
+            start = start.value
+        elif isinstance(start, Rule):
+            start = start.origin.name
+            start = str(start)
+        # visited.add((start, tuple()))
+        queue = [(start, tuple())]
+        qidx = 0
+        findings = set()
+        # print("    before findings", findings)
+        while qidx < len(queue):
+            cur, stag = queue[qidx]
+            assert cur in self.back_edges, f"INVARIANT FAILED: {cur} not in self.back_edges. no-way-out must handle this."
+            qidx += 1
+            for parent, ruleptr, no_way_out in self.back_edges[cur]:
+                rule = ruleptr.rule
+                ptr = ruleptr.index
+                sym = rule.expansion[ptr]
+                new_stag = stag
+                if isinstance(sym, TagNonTerminal) and (tmp_stag := sym.rule_tag) is not None:
+                    new_stag = list(new_stag)
+                    new_stag.append(tmp_stag)
+                    # print("    NEW_STAG from ", rule, ":", tmp_stag, "->", new_stag)
+                new_stag = tuple(new_stag)
+                queue_entry = (parent, new_stag)   
+                if not (queue_entry in visited):
+                    visited.add(queue_entry)
+                    if not no_way_out:
+                        # print(f"        {cur} -- {ruleptr} --> {parent} ({new_stag})")
+                        queue.append(queue_entry)
+                    else:
+                        # print("    ADDING FINDING:", ruleptr, f"({ptr})", new_stag)
+                        findings.add((parent, new_stag, ptr)) 
+        # print("    len(findings):", len(findings))
+        return findings        
 
 # state generation ensures no duplicate LR0ItemSets
 class LR0ItemSet:

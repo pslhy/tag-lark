@@ -476,7 +476,8 @@ class Lark(Serialize):
             if self.options.taglark:
                 self._parse_tree_builder = TagParseTreeBuilder(
                         self.rules,
-                        self.grammar.tag_defs
+                        self.grammar.tag_defs,
+                        self.grammar.rule_tag_defs # TODO: will deprecate
                 )
             else:
                 self._parse_tree_builder = ParseTreeBuilder(
@@ -495,7 +496,7 @@ class Lark(Serialize):
         parser_conf = (
             ParserConf(self.rules, self._callbacks, self.options.start) 
             if not self.options.taglark else 
-            TagParserConf(self.rules, self._callbacks, self.options.start, self.grammar.tag_defs)
+            TagParserConf(self.rules, self._callbacks, self.options.start, self.grammar.tag_defs, self.grammar.rule_tag_defs) # TODO: rule_tag_defs will deprecate
         )
         return _construct_parsing_frontend(
             self.options.parser,

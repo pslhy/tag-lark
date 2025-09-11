@@ -576,7 +576,7 @@ class PrepareRuleTag(Transformer_InPlace):
     def rule_tag(self, c):
         assert len(c) == 2
         sym, tag_token = c
-        print(sym, tag_token)
+        # print(sym, tag_token)
         if isinstance(sym, TagNonTerminal):
             rule_tagged = TagNonTerminal(
                 sym.name,
@@ -593,7 +593,6 @@ class PrepareRuleTag(Transformer_InPlace):
             raise NotImplementedError(f"Terminal '{sym.name}' can be tagged by rule-tag '{tag_token.value}'.")
         else:
             assert False, sym
-        print(rule_tagged)
         return rule_tagged
 
 class ApplyTemplates(Transformer_InPlace):
@@ -781,6 +780,7 @@ class Grammar:
     term_defs: List[Tuple[str, Tuple[Tree, int]]]
     rule_defs: List[Tuple[str, Tuple[str, ...], Tree, RuleOptions]]
     tag_defs: List[Optional[str]]
+    rule_tag_defs: List[Optional[str]] # TODO: will deprecate
     ignore: List[str]
 
     def __init__(self, rule_defs: List[Tuple[str, Tuple[str, ...], Tree, RuleOptions]], term_defs: List[Tuple[str, Tuple[Tree, int]]], ignore: List[str]) -> None:
@@ -860,6 +860,7 @@ class Grammar:
         simplify_rule = SimplifyRule_Visitor()
         compiled_rules: List[Rule] = []
         tag_defs: Set[Optional[str]] = {None}
+        rule_tag_defs: Set[Optional[str]] = {None} # TODO: will deprecate
         for rule_content in rules:
             name, tree, options = rule_content
             simplify_rule.visit(tree)
@@ -884,9 +885,12 @@ class Grammar:
                         sym.filter_out = False
                     if (isinstance(sym, TagNonTerminal) or isinstance(sym, TagTerminal)) and not sym.is_parameter:
                         tag_defs.add(sym.tag)
+                    if isinstance(sym, TagNonTerminal) and sym.rule_tag is not None: # TODO: will deprecate
+                        rule_tag_defs.add(sym.rule_tag)
                 rule = Rule(NonTerminal(name), expansion, i, alias, exp_options)
                 compiled_rules.append(rule)
         self.tag_defs = list(tag_defs)
+        self.rule_tag_defs = list(rule_tag_defs) # TODO: will deprecate
         # Remove duplicates of empty rules, throw error for non-empty duplicates
         if len(set(compiled_rules)) != len(compiled_rules):
             duplicates = classify(compiled_rules, lambda x: x)
@@ -1195,7 +1199,7 @@ def _make_rule_tuple(modifiers_tree, name, params, priority_tree, expansions):
 
     if params is not None:
         params = [t.value for t in params.children]  # For the grammar parser
-    print("---\n", name +"\n", expansions)
+    
     return name, params, expansions, RuleOptions(keep_all_tokens, expand1, priority=priority,
                                                  template_source=(name if params else None))
 
