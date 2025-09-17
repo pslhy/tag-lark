@@ -130,13 +130,13 @@ class StateMap:
         elif isinstance(start, Rule):
             start = start.origin.name
             start = str(start)
-        # visited.add((start, tuple()))
-        queue = [(start, tuple())]
+        visited.add((start, tuple(), False))
+        queue = [(start, tuple(), False)]
         qidx = 0
         findings = set()
         # print("    before findings", findings)
         while qidx < len(queue):
-            cur, stag = queue[qidx]
+            cur, stag, _ = queue[qidx]
             assert cur in self.back_edges, f"INVARIANT FAILED: {cur} not in self.back_edges. no-way-out must handle this."
             qidx += 1
             for parent, ruleptr, no_way_out in self.back_edges[cur]:
@@ -149,7 +149,7 @@ class StateMap:
                     new_stag.append(tmp_stag)
                     # print("    NEW_STAG from ", rule, ":", tmp_stag, "->", new_stag)
                 new_stag = tuple(new_stag)
-                queue_entry = (parent, new_stag)   
+                queue_entry = (parent, new_stag, no_way_out)   
                 if not (queue_entry in visited):
                     visited.add(queue_entry)
                     if not no_way_out:
