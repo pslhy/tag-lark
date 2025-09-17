@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 from ..lexer import Token, LexerThread
 from ..utils import Serialize
 from ..common import ParserConf, TagParserConf, ParserCallbacks
+from ..grammar import Rule
 
 from .lalr_analysis import LALR_Analyzer, IntParseTable, ParseTableBase
 from .lalr_interactive_parser import InteractiveParser
@@ -77,7 +78,7 @@ class TagLALR_Parser(LALR_Parser):
 
         self._parse_table = analysis.parse_table
         self.parser_conf = parser_conf
-        self.parser = _TagParser(analysis.parse_table, callbacks, parser_conf.tags, debug)
+        self.parser = _TagParser(analysis.parse_table, callbacks, parser_conf.tags, parser_conf.rules, debug)
 
     @classmethod
     def deserialize(cls, data, memo, callbacks, tags, debug=False):
@@ -142,14 +143,15 @@ class _TagParser(_Parser):
     debug: bool
     tags: List[Optional[str]]
 
-    def __init__(self, parse_table: ParseTableBase, callbacks: ParserCallbacks, tags: List[Optional[str]], debug: bool=False):
+    def __init__(self, parse_table: ParseTableBase, callbacks: ParserCallbacks, tags: List[Optional[str]], rules: List[Rule], debug: bool=False):
         self.parse_table = parse_table
         self.callbacks = callbacks
         self.tags = tags
+        self.rules = rules
         self.debug = debug
 
     def parse(self, lexer: LexerThread, start: str, value_stack=None, state_stack=None, start_interactive=False):
-        parse_conf = TagParseConf(self.parse_table, self.callbacks, start, self.tags)
+        parse_conf = TagParseConf(self.parse_table, self.callbacks, start, self.tags, self.rules)
         parser_state = TagParserState(parse_conf, lexer, state_stack, value_stack)
         if start_interactive:
             return InteractiveParser(self, parser_state, parser_state.lexer)

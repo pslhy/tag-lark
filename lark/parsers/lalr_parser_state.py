@@ -1,9 +1,10 @@
 from copy import deepcopy, copy
 from collections import defaultdict
 from typing import Dict, Any, Generic, List, Tuple, Optional, Set
-from ..grammar import NonTerminal, TagNonTerminal
+from ..grammar import NonTerminal, TagNonTerminal, Rule, TagTerminal
 from ..lexer import Token, TagToken, LexerThread
 from ..common import ParserCallbacks
+from ..rule_analyzer import RuleAnalyzer
 
 from .grammar_analysis import StateMap
 from .lalr_analysis import Shift, ParseTableBase, StateT
@@ -33,7 +34,7 @@ class ParseConf(Generic[StateT]):
         self.start = start
 
 class TagParseConf(Generic[StateT]):
-    __slots__ = 'parse_table', 'callbacks', 'start', 'start_state', 'end_state', 'states', 'tags'
+    __slots__ = 'parse_table', 'callbacks', 'start', 'start_state', 'end_state', 'states', 'tags', 'rules'
 
     parse_table: ParseTableBase[StateT]
     callbacks: ParserCallbacks
@@ -44,8 +45,9 @@ class TagParseConf(Generic[StateT]):
     states: Dict[StateT, Dict[str, tuple]]
 
     tags: List[Optional[str]]
+    rules: List[Rule]
 
-    def __init__(self, parse_table: ParseTableBase[StateT], callbacks: ParserCallbacks, start: str, tags: List[Optional[str]]):
+    def __init__(self, parse_table: ParseTableBase[StateT], callbacks: ParserCallbacks, start: str, tags: List[Optional[str]], rules: List[Rule]):
         self.parse_table = parse_table
 
         self.start_state = self.parse_table.start_states[start]
@@ -55,6 +57,7 @@ class TagParseConf(Generic[StateT]):
         self.callbacks = callbacks
         self.start = start
         self.tags = tags
+        self.rules = rules
 
 
 class ParserState(Generic[StateT]):
@@ -139,12 +142,13 @@ class ParserState(Generic[StateT]):
 class TagParserState(ParserState[StateT]):
 
     def __init__(self, parse_conf: TagParseConf[StateT], lexer: LexerThread, state_stack=None, value_stack=None):
-        self.parse_conf = parse_conf
+        self.parse_conf : TagParseConf[StateT] = parse_conf
         self.lexer = lexer
         self.state_stack = state_stack or [(self.parse_conf.start_state, 0)]
         self.value_stack = value_stack or []
         
         self.map_cache = dict()
+        self.ra_cache = dict()
 
     @property
     def position(self) -> StateT:
@@ -264,7 +268,7 @@ class TagParserState(ParserState[StateT]):
 
         return False
 
-    def _get_possible_tag_from_state(self, idx: int) -> Set[Optional[str]]:
+    def _get_possible_tag_from_state(self, idx: int, ignore_base: bool = False) -> Set[Optional[str]]:
         _idx = -(idx + 1)
         states, _ = self.state_stack[_idx]
         if isinstance(states, int):
@@ -281,16 +285,16 @@ class TagParserState(ParserState[StateT]):
             ptr = state.index
             if ptr == 0:
                 continue
-            rule = state.rule
+            rule: Rule = state.rule
             prev_sym = rule.expansion[ptr - 1]
             if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rule.expansion[ptr].name, idx - 1)):
                 # can a ruleptr be reduced in not top-element of state stack? -> False
                 continue
             if prev_sym.name != root:
                 assert False, f"INVARIANT FAILED: Expected {root}, got {prev_sym.name}"
-            if not getattr(prev_sym, 'is_parameter', False): # SHORTCUT : clear tag
+            if not ignore_base and not getattr(prev_sym, 'is_parameter', False): # SHORTCUT : clear tag
                 possible_tags.add(getattr(prev_sym, 'tag', None))
-            else: # tag is not clear (by param. passing)
+            elif rule.options.is_tag_rule: # tag is not clear (by param. passing)
                 par_rule = str(rule.origin.name)
                 queue_depth = defaultdict(set)
                 depth = ptr
@@ -309,7 +313,8 @@ class TagParserState(ParserState[StateT]):
                             max_depth = max(nxt_depth, max_depth)
                             queue_depth[nxt_depth].add(goal)
                     depth += 1
-                                
+            else:
+                possible_tags.add(None)                    
 
         return possible_tags
 
@@ -325,7 +330,7 @@ class TagParserState(ParserState[StateT]):
             tags = self._get_possible_tag_from_state(idx)
         return tags
 
-    def _get_possible_stag_from_state(self, idx: int) -> Set[List[str]]:
+    def _get_possible_stag_from_state(self, idx: int, ignore_base: bool = False) -> Set[List[str]]:
         _idx = -(idx + 1)
         states, _ = self.state_stack[_idx]
         if isinstance(states, int):
@@ -349,12 +354,12 @@ class TagParserState(ParserState[StateT]):
                 continue
             if prev_sym.name != root:
                 assert False, f"INVARIANT FAILED: Expected {root}, got {prev_sym.name}"
-            
+            # print(state, "PASS")
             base = None
             if isinstance(prev_sym, TagNonTerminal):
                 base = prev_sym.rule_tag
             
-            if base is None:
+            if ignore_base or base is None:
                 base = tuple()
             else:
                 base = tuple([base])
@@ -402,5 +407,54 @@ class TagParserState(ParserState[StateT]):
         stags = set(tuple(reversed(t)) for t in stags)
         return stags
             
+    def get_coming_term_stag(self, tag: str, ra: RuleAnalyzer) -> Set[List[str]]:
+        possible_stags = set()
+        for idx, (states, _) in enumerate(reversed(self.state_stack)):
+            par_stag = (
+                self._get_possible_stag_from_state(idx, ignore_base=True)
+                if idx + 1 < len(self.state_stack) else set([tuple()])
+            )
+            # print(idx,  par_stag)
+            first_loop = idx == 0
+            if isinstance(states, int):
+                states = self.parse_conf.parse_table.idx_to_state[states]
+            for state in states:
+                ptr = state.index
+                if idx + 1 < len(self.state_stack) and ptr == 0:
+                    continue
+                # print(idx, state)
+                if not first_loop:
+                    if ptr >= len(state.rule.expansion):
+                        continue
+                    sym = state.rule.expansion[ptr].name
+                    if not self.can_reduce(sym, idx - 1):
+                        continue
+                # print("PASS")
+                exp_len = len(state.rule.expansion)
+                start_ptr = ptr if first_loop else ptr + 1 # if not first_loop, assume that pointed symbol is reduced.
+                for i in range(start_ptr, exp_len):
+                    cur_sym = state.rule.expansion[i]
+                    is_reproducible = ra.is_tg_reproducible(cur_sym.name)
+                    if not is_reproducible and getattr(cur_sym, 'is_parameter', False):
+                        is_reproducible = (
+                            ra.is_param_reproducible(cur_sym.name)
+                            and tag in self._get_possible_tag_from_state(idx, ignore_base=True)
+                        )
+                    if is_reproducible:
+                        cur_stag = getattr(cur_sym, 'rule_tag', None)
+                        for bt in par_stag:
+                            if cur_stag is None:
+                                possible_stags.add(bt)
+                            else:
+                                possible_stags.add(tuple([cur_stag] + list(bt)))
+        return possible_stags
 
+    def can_come_term_with_tag(self, tag: str) -> bool:
+        rule_analyzer = None
+        if self.ra_cache.get(tag) is None:
+            rule_analyzer = RuleAnalyzer(self.parse_conf.rules, tag)
+            self.ra_cache[tag] = rule_analyzer
+        else:
+            rule_analyzer = self.ra_cache[tag]
+        return self.get_coming_term_stag(tag, rule_analyzer)
 ###}
