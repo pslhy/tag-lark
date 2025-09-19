@@ -420,8 +420,8 @@ class TagParserState(ParserState[StateT]):
                 states = self.parse_conf.parse_table.idx_to_state[states]
             for state in states:
                 ptr = state.index
-                if idx + 1 < len(self.state_stack) and ptr == 0:
-                    continue
+                # if idx + 1 < len(self.state_stack) and ptr == 0:
+                #     continue
                 # print(idx, state)
                 if not first_loop:
                     if ptr >= len(state.rule.expansion):
