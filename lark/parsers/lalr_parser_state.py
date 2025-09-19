@@ -11,7 +11,7 @@ from .lalr_analysis import Shift, ParseTableBase, StateT
 from lark.exceptions import UnexpectedToken
 
 ###{standalone
-
+MAX = 1<<30
 class ParseConf(Generic[StateT]):
     __slots__ = 'parse_table', 'callbacks', 'start', 'start_state', 'end_state', 'states'
 
@@ -147,6 +147,7 @@ class TagParserState(ParserState[StateT]):
         self.state_stack = state_stack or [(self.parse_conf.start_state, 0)]
         self.value_stack = value_stack or []
         
+        self.last_idx = 0
         self.map_cache = dict()
         self.ra_cache = dict()
 
@@ -176,12 +177,26 @@ class TagParserState(ParserState[StateT]):
                 # shift once and return
                 assert not is_end
                 state_stack.append((arg, 1))
+                if self.last_idx == 0:
+                    states_ = arg if not isinstance(arg, int) else self.parse_conf.parse_table.idx_to_state[arg]
+                    for s in states_:
+                        # print(s)
+                        for sym in s.rule.expansion:
+                            if getattr(sym, 'rule_tag', None) is not None:
+                                self.last_idx = len(self.state_stack)
+                                # print(self.last_idx)
+                                break
+                        if self.last_idx != 0:
+                            break
                 value_stack.append((-1, -1))
                 return
             else:
                 # reduce+shift as many times as necessary
                 rule = arg
                 size = len(rule.expansion)
+                if len(state_stack) - size < self.last_idx:
+                    self.last_idx = 0
+                    # print(self.last_idx)
                 if size:
                     s = state_stack[-size:]
                     del state_stack[-size:]
@@ -202,6 +217,17 @@ class TagParserState(ParserState[StateT]):
                 _action, new_state = states[state_stack[-1][0]][rule.origin.name]
                 assert _action is Shift
                 state_stack.append((new_state, token_sum))
+                if self.last_idx == 0:
+                    states_ = new_state if not isinstance(new_state, int) else self.parse_conf.parse_table.idx_to_state[new_state]
+                    for s in states_:
+                        # print(s)
+                        for sym in s.rule.expansion:
+                            if getattr(sym, 'rule_tag', None) is not None:
+                                self.last_idx = len(self.state_stack)
+                                # print(self.last_idx)
+                                break
+                        if self.last_idx != 0:
+                            break
                 value_stack.extend(value)
 
                 if is_end and state_stack[-1][0] == end_state:
@@ -372,6 +398,9 @@ class TagParserState(ParserState[StateT]):
 
             while depth <= max_depth:
                 # print("DEPTH:", depth, queue_depth[depth])
+                if idx + depth + self.last_idx - 1 > len(self.state_stack):
+                    # print(idx, depth, self.last_idx, len(self.state_stack))
+                    break
                 state_map = self.get_state_map_index_of(idx + depth)
                 for leaf, base_tag in queue_depth[depth].items():
                     findings = state_map.find_rule_tag(leaf)
@@ -410,6 +439,8 @@ class TagParserState(ParserState[StateT]):
     def get_coming_term_stag(self, tag: str, ra: RuleAnalyzer) -> Set[List[str]]:
         possible_stags = set()
         for idx, (states, _) in enumerate(reversed(self.state_stack)):
+            if idx + self.last_idx - 1 > len(self.state_stack):
+                break
             par_stag = (
                 self._get_possible_stag_from_state(idx, ignore_base=True)
                 if idx + 1 < len(self.state_stack) else set([tuple()])
