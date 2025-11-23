@@ -184,7 +184,6 @@ class TagParserState(ParserState[StateT]):
                         for sym in s.rule.expansion:
                             if getattr(sym, 'rule_tag', None) is not None:
                                 self.last_idx = len(self.state_stack)
-                                # print(self.last_idx)
                                 break
                         if self.last_idx != 0:
                             break
@@ -397,9 +396,10 @@ class TagParserState(ParserState[StateT]):
             queue_depth[ptr][par_rule].add(base) # don't need to call get_roots() - if ptr > 0, already root
 
             while depth <= max_depth:
-                # print("DEPTH:", depth, queue_depth[depth])
                 if idx + depth + self.last_idx - 1 > len(self.state_stack):
-                    # print(idx, depth, self.last_idx, len(self.state_stack))
+                    for leaf, base_tag in queue_depth[depth].items():
+                        for bt in base_tag:
+                            possible_tags.add(bt) 
                     break
                 state_map = self.get_state_map_index_of(idx + depth)
                 for leaf, base_tag in queue_depth[depth].items():
@@ -487,5 +487,6 @@ class TagParserState(ParserState[StateT]):
             self.ra_cache[tag] = rule_analyzer
         else:
             rule_analyzer = self.ra_cache[tag]
+
         return self.get_coming_term_stag(tag, rule_analyzer)
 ###}
