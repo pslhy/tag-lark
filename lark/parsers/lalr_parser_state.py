@@ -230,7 +230,7 @@ class TagParserState(ParserState[StateT]):
                 value_stack.extend(value)
 
                 if is_end and state_stack[-1][0] == end_state:
-                    return value_stack[-1]
+                    return value_stack[-1] if len(value_stack) > 0 else None
     
     def _get_nth_last_token(self, n: int) -> int:
         n = n + 1
