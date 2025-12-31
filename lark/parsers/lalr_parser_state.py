@@ -232,6 +232,52 @@ class TagParserState(ParserState[StateT]):
                 if is_end and state_stack[-1][0] == end_state:
                     return value_stack[-1] if len(value_stack) > 0 else None
     
+    def fill_symbols(self):
+        state_stack = self.state_stack
+        states = self.parse_conf.states
+
+        filled = []
+        while True:
+            state, _ = state_stack[-1]
+            if isinstance(state, int):
+                state = self.parse_conf.parse_table.idx_to_state[state]
+            ptr = None
+            for s in state:
+                if s.index > 0:
+                    if ptr is None:
+                        ptr = s
+                    else:
+                        if s.rule.origin.name in [x.name for x in s.rule.expansion[:s.index]]:
+                            continue
+                        terms_to_fill = lambda p: len(p.rule.expansion) - p.index
+                        if terms_to_fill(s) <= terms_to_fill(ptr):
+                            ptr = s
+            
+            rule = ptr.rule
+            if rule.origin.name == self.parse_conf.start:
+                break
+
+            if ptr is None:
+                assert False, "No valid ptr to fill symbols"
+
+            symbols = ptr.rule.expansion[ptr.index:]
+            filled.extend(symbols)
+
+            del state_stack[-ptr.index:]
+
+            # print(filled)
+            # print(ptr)
+            # if len(symbols) > 0:
+            #     print(symbols)
+            
+            _action, new_state = states[state_stack[-1][0]][rule.origin.name]
+            assert _action is Shift
+            state_stack.append((new_state, 0))
+
+        filled = [x.name for x in filled]
+        return filled
+
+
     def _get_nth_last_token(self, n: int) -> int:
         n = n + 1
         token_sum = 0
