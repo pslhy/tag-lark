@@ -311,6 +311,9 @@ class TagParserState(ParserState[StateT]):
         if idx == -1:
             return True
         
+        if tg_sym is None:
+            return False
+        
         state_map = self.get_state_map_index_of(idx)
 
         if tg_sym.isupper(): # is terminal?
@@ -318,7 +321,8 @@ class TagParserState(ParserState[StateT]):
                 ptr = ruleptr.index
                 sym = ruleptr.rule.expansion[ptr-1].name
                 # check if target_symbol is equals to represent_symbol of current state-map.
-                return sym == tg_sym
+                new_tg_sym = ruleptr.rule.expansion[ptr].name if ptr < len(ruleptr.rule.expansion) else None
+                return sym == tg_sym and self.can_reduce(new_tg_sym, idx - 1)
 
         for ruleptr in state_map.repr_ruleptr:
             rule_name = str(ruleptr.rule.origin.name)
@@ -329,7 +333,9 @@ class TagParserState(ParserState[StateT]):
                 sym = ruleptr.rule.expansion[ptr-1].name
                 if tg_sym != sym:
                     continue
-                return True
+                # return True
+                new_tg_sym = ruleptr.rule.expansion[ptr].name if ptr < len(ruleptr.rule.expansion) else None
+                return self.can_reduce(new_tg_sym, idx -1)
             new_tg_sym = ruleptr.rule.expansion[ptr].name if ptr < len(ruleptr.rule.expansion) else None
             if not self.can_reduce(new_tg_sym, idx - 1): # can future symbol be reduced? -> if so, current ruleptr can be reduced.
                 continue
