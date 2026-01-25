@@ -434,7 +434,7 @@ class TagParserState(ParserState[StateT]):
                 base = tuple()
             else:
                 base = tuple([base])
-            # print(state, base)
+            # print(state, base, self.last_idx)
             par_rule = str(rule.origin.name)
             queue_depth = defaultdict(lambda: defaultdict(set))
             depth = ptr
@@ -442,16 +442,30 @@ class TagParserState(ParserState[StateT]):
             queue_depth[ptr][par_rule].add(base) # don't need to call get_roots() - if ptr > 0, already root
 
             while depth <= max_depth:
+                # print("- ITER DEPTH START:", depth, "/", max_depth)
+                # for dep, rule2tag in queue_depth.items():
+                #     for r, bt in rule2tag.items():
+                        # print("  -", dep, r, bt)
+
+                if len(queue_depth[depth]) == 0:
+                    # print("- NO MORE QUEUE AT DEPTH:", depth)
+                    depth += 1
+                    continue
+
                 if idx + depth + self.last_idx - 1 > len(self.state_stack):
+                    # print("- REACHED END STATE")
+                    # print(f"  - {idx} + {depth} + {self.last_idx} - 1 > {len(self.state_stack)}")
                     for leaf, base_tag in queue_depth[depth].items():
                         for bt in base_tag:
                             possible_tags.add(bt) 
                     break
                 state_map = self.get_state_map_index_of(idx + depth)
+                # print("  - USE STATE MAP AT IDX:", len(self.state_stack) - (idx + depth + 1))
                 for leaf, base_tag in queue_depth[depth].items():
                     findings = state_map.find_rule_tag(leaf)
+                    # print("    -", leaf)
                     for sym, stag, ptr in findings:
-                        # print("-", sym, stag, ptr)
+                        # print("      -", sym, stag, ptr)
                         if self.can_reduce(sym, idx + depth - 1):
                             # print(ptr > 0, ptr)
                             if ptr > 0:
@@ -464,6 +478,7 @@ class TagParserState(ParserState[StateT]):
                                 for bt in base_tag:
                                     possible_tags.add(tuple(list(bt) + list(stag)))                
                 depth += 1
+                # print("- ITER DEPTH END:", depth, "/", max_depth, '\n')
                                 
         return possible_tags
 
