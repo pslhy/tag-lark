@@ -244,9 +244,9 @@ class TagParserState(ParserState[StateT]):
             ptr = None
             for s in state:
                 if s.index > 0:
-                    if ptr is None:
+                    if ptr is None or ptr.index < s.index:
                         ptr = s
-                    else:
+                    elif ptr.index <= s.index:
                         if s.rule.origin.name in [x.name for x in s.rule.expansion[:s.index]]:
                             continue
                         terms_to_fill = lambda p: len(p.rule.expansion) - p.index
