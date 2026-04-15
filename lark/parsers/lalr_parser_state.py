@@ -6,7 +6,7 @@ from ..lexer import Token, TagToken, LexerThread
 from ..common import ParserCallbacks
 from ..rule_analyzer import RuleAnalyzer
 
-from .grammar_analysis import StateMap, StateMapV2
+from .grammar_analysis import StateMap, StateMapV2, rptr2vtx
 from .lalr_analysis import Shift, ParseTableBase, StateT
 from lark.exceptions import UnexpectedToken
 
@@ -268,14 +268,16 @@ class TagParserState(ParserState[StateT]):
             top_state_map_v2 = self.get_state_map_v2_index_of(0)
             (sym, rule, ptr) = next(top_state_map_v2.prepare())
 
-            fills = list(rule)[ptr:]
+            fills = rule[ptr:]
 
             for i in range(1, len(state_stack)):
                 state_map_v2 = self.get_state_map_v2_index_of(i)
-                (sym, rule, ptr), syms = state_map_v2.get_path((sym, rule, ptr - 1))
-                fills = fills + syms
+                results = state_map_v2.get_paths((sym, rule, ptr - 1), check='remainder')
+                for vtx in results:
+                    fills = fills + results[vtx]
+                    break
 
-            return fills
+            return list(fills)
             
 
     def _get_nth_last_token(self, n: int) -> int:
@@ -309,111 +311,62 @@ class TagParserState(ParserState[StateT]):
                 self.map_cache_v2[states] = StateMapV2(states)
         return self.map_cache_v2[states]
 
-    def parent_check(self, tg_sym: str, idx: int, leaf: str) -> bool:
-        state_map = self.get_state_map_index_of(idx)
-        if leaf == tg_sym:
-            return True
-        path = state_map.get_roots(leaf)    
-        if tg_sym in path:
-            return True
-        return False
 
-    def can_reduce(self, tg_sym: str, idx: int) -> bool:
-        if idx == -1:
-            return True
-        
-        state_map = self.get_state_map_index_of(idx)
+    def can_reduce(self, vtx: Tuple[str, Tuple[str], int], idx: int) -> bool:
+        top_state_map_v2 = self.get_state_map_v2_index_of(0)
+        candidates = top_state_map_v2.prepare()
+        for i in range(1, idx+1):
+            state_map_v2 = self.get_state_map_v2_index_of(i)
+            new_candidates = set()
+            for (src_sym, src_rule, src_ptr) in candidates:
+                results = state_map_v2.get_paths((src_sym, src_rule, src_ptr - 1))
+                new_candidates = new_candidates.union(results)
+            candidates = new_candidates
+        return vtx in candidates
 
-        if tg_sym.isupper(): # is terminal?
-            for ruleptr in state_map.repr_ruleptr:
-                ptr = ruleptr.index
-                sym = ruleptr.rule.expansion[ptr-1].name
-                # check if target_symbol is equals to represent_symbol of current state-map.
-                return sym == tg_sym
+    def resolve_tagrule(self, vtx: Tuple[str, Tuple[str], int], idx: int) -> Set[str]:
+        candidates = {vtx} 
+        tags = set()
+        for i in range(idx+1, len(self.state_stack)):
+            state_map_v2 = self.get_state_map_v2_index_of(i)
+            new_candidates = set()
+            for (src_sym, src_rule, src_ptr) in candidates:
+                results = state_map_v2.get_paths(
+                    (src_sym, src_rule, src_ptr - 1), 
+                    check='tagrule',
+                    nondeterministic=True,
+                )
+                for vtx, vtx_results in results.items():
+                    for found, tag in vtx_results:
+                        if found:
+                            tags.add(tag)
+                        else:
+                            new_candidates.add(vtx)
+            candidates = new_candidates
+        assert len(tags) > 0
+        return tags
 
-        for ruleptr in state_map.repr_ruleptr:
-            # repr_ruleptr is guaranteed to be in form of A -> ... α ⋅ β, so no need to check ptr == 0 case.
-            rule_name = str(ruleptr.rule.origin.name)
-            ptr = ruleptr.index
-            if idx > 0 and ptr >= len(ruleptr.rule.expansion): # almost-reduce check
-                continue
-            elif ptr > 1: # shift-from-past check
-                sym = ruleptr.rule.expansion[ptr-1].name
-                if tg_sym != sym:
-                    continue
-                return True
-            new_tg_sym = ruleptr.rule.expansion[ptr].name if ptr < len(ruleptr.rule.expansion) else None
-            if not self.can_reduce(new_tg_sym, idx - 1): # can future symbol be reduced? -> if so, current ruleptr can be reduced.
-                continue
-                
-            # parent stack must contatin ruleptr like A -> ... ⋅ α β. 
-            if self.parent_check(tg_sym, idx + 1, rule_name): # does reducing current ruleptr affect to target symbol?
-                # parent stack 
-                # CASE 1
-                #      A  -> ⋅ α β
-                #      A1 -> ⋅ A ...
-                #      ...
-                #      An -> ⋅ An-1 ...
-                #      TG -> ⋅ An ...
-                #      B  -> ... ⋅ TG ...
-                # get_roots() : A -> A1 -> ... -> An -> [TG]
-                # if `An+1 -> An` and `C -> ... ⋅ An+1` are in state-map of idx+1, then get_roots() return [TG, An+1]
-                #
-                # CASE 2
-                #      α is TG
-                return True
+    def resolve_stag(self, vtx: Tuple[str, Tuple[str], int], idx: int, base = tuple()) -> Set[List[str]]:
+        candidates = {vtx : set([base])} 
+        if self.last_idx == 0:
+            return set([base])
 
-        return False
-    
-    # def parent_check_v2(self, tg_sym: str, idx: int, leaf: str) -> Tuple[bool, List[str]]:
-    #     # 다익스트라 알고리즘으로 최단거리
-    #     # path 구하고 뒤집기
-    #     # 시작 정점 ㅣ leaf, 도착 정점 ㅣ tg_sym 
-
-    # def can_reduce_v2(self, tg_sym: str, idx: int, shortest: bool = False) -> Tuple[bool, List[str]]:
-    #     if idx == -1:
-    #         return True, []
-        
-    #     state_map = self.get_state_map_index_of(idx)
-    #     tmp_path = None
-    #     for ruleptr in state_map.repr_ruleptr:
-    #         rule_name = str(ruleptr.rule.origin.name)
-    #         rule = ruleptr.rule
-    #         ptr = ruleptr.index
-    #         # almost-reduce check
-    #         if ptr == len(ruleptr.rule.expansion):
-    #             # only the top element of the state stack
-    #             if idx > 0: 
-    #                 continue
-
-    #         new_tg_sym = rule.expansion[ptr].name
-    #         do_not_check_parent = rule.expansion[ptr-1].name == tg_sym
-    #         # rvs_remain = [] if idx > 0 else rule.expansion[ : ptr - 1 : -1]
-
-    #         c, path = self.can_reduce_v2(new_tg_sym, idx - 1, shortest=shortest)
-    #         if not c:
-    #             continue
-    #         if idx == 0:
-    #             path = rule.expansion[ : ptr - 1 : -1]
-
-    #         if do_not_check_parent:
-    #             if not shortest:
-    #                 return True, path
-    #             if tmp_path is None or len(path) < len(tmp_path):
-    #                 tmp_path = path
-    #             continue
-
-    #         _c, parent_path = self.parent_check_v2(tg_sym, idx + 1, rule_name)
-    #         if _c:
-    #             if not shortest:
-    #                 return True, parent_path + path
-    #             if tmp_path is None or len(parent_path) + len(path) < len(tmp_path):
-    #                 tmp_path = parent_path + path 
-        
-    #     if tmp_path is not None:
-    #         return True, tmp_path
-    #     return False, []
-
+        for i in range(idx+1, len(self.state_stack) - self.last_idx + 1):
+            state_map_v2 = self.get_state_map_v2_index_of(i)
+            new_candidates = defaultdict(set)
+            for (src_sym, src_rule, src_ptr), src_stags in candidates.items():
+                results = state_map_v2.get_paths(
+                    (src_sym, src_rule, src_ptr - 1), 
+                    check='stag',
+                    nondeterministic=True,
+                )
+                for vtx, vtx_stags in results.items():
+                    for src_stag in src_stags:
+                        for vtx_stag in vtx_stags:
+                            new_candidates[vtx].add(tuple(src_stag + vtx_stag))
+            candidates = new_candidates
+            
+        return set(stag for stags in candidates.values() for stag in stags)
 
     def _get_possible_tag_from_state(self, idx: int, ignore_base: bool = False) -> Set[Optional[str]]:
         _idx = -(idx + 1)
@@ -434,7 +387,7 @@ class TagParserState(ParserState[StateT]):
                 continue
             rule: Rule = state.rule
             prev_sym = rule.expansion[ptr - 1]
-            if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rule.expansion[ptr].name, idx - 1)):
+            if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rptr2vtx(state), idx)):
                 # can a ruleptr be reduced in not top-element of state stack? -> False
                 continue
             if prev_sym.name != root:
@@ -442,24 +395,7 @@ class TagParserState(ParserState[StateT]):
             if not ignore_base and not getattr(prev_sym, 'is_parameter', False): # SHORTCUT : clear tag
                 possible_tags.add(getattr(prev_sym, 'tag', None))
             elif rule.options.is_tag_rule: # tag is not clear (by param. passing)
-                par_rule = str(rule.origin.name)
-                queue_depth = defaultdict(set)
-                depth = ptr
-                max_depth = depth
-                queue_depth[ptr].add(par_rule) # don't need to call get_roots() - if ptr > 0, already root
-
-                while depth <= max_depth:
-                    state_map = self.get_state_map_index_of(idx + depth)
-                    for leaf in queue_depth[depth]:
-                        goals, tags =  state_map.get_roots(leaf, use_tag_edges=True)
-                        for tag, sym in tags:
-                            if self.can_reduce(sym, idx + depth - 1):
-                                possible_tags.add(tag)
-                        for goal, dep in goals:
-                            nxt_depth = depth + dep
-                            max_depth = max(nxt_depth, max_depth)
-                            queue_depth[nxt_depth].add(goal)
-                    depth += 1
+                possible_tags = possible_tags.union(self.resolve_tagrule(rptr2vtx(state), idx))
             else:
                 possible_tags.add(None)                    
 
@@ -496,7 +432,7 @@ class TagParserState(ParserState[StateT]):
                 continue
             rule = state.rule
             prev_sym = rule.expansion[ptr - 1]
-            if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rule.expansion[ptr].name, idx - 1)):
+            if idx > 0 and (ptr >= len(rule.expansion) or not self.can_reduce(rptr2vtx(state), idx)):
                 # can a ruleptr in not top-element of state stack be reduced? -> False
                 continue
             if prev_sym.name != root:
@@ -510,62 +446,12 @@ class TagParserState(ParserState[StateT]):
                 base = tuple()
             else:
                 base = tuple([base])
-            # print(state, base, self.last_idx)
-            par_rule = str(rule.origin.name)
-            queue_depth = defaultdict(lambda: defaultdict(set))
-            depth = ptr
-            max_depth = depth
-            queue_depth[ptr][par_rule].add(base) # don't need to call get_roots() - if ptr > 0, already root
-
-            while depth <= max_depth:
-                # print("- ITER DEPTH START:", depth, "/", max_depth)
-                # for dep, rule2tag in queue_depth.items():
-                #     for r, bt in rule2tag.items():
-                        # print("  -", dep, r, bt)
-
-                if len(queue_depth[depth]) == 0:
-                    # print("- NO MORE QUEUE AT DEPTH:", depth)
-                    depth += 1
-                    continue
-
-                if idx + depth + self.last_idx - 1 > len(self.state_stack):
-                    # print("- REACHED END STATE")
-                    # print(f"  - {idx} + {depth} + {self.last_idx} - 1 > {len(self.state_stack)}")
-                    for leaf, base_tag in queue_depth[depth].items():
-                        for bt in base_tag:
-                            possible_tags.add(bt) 
-                    break
-                state_map = self.get_state_map_index_of(idx + depth)
-                # print("  - USE STATE MAP AT IDX:", len(self.state_stack) - (idx + depth + 1))
-                for leaf, base_tag in queue_depth[depth].items():
-                    findings = state_map.find_rule_tag(leaf)
-                    # print("    -", leaf)
-                    for sym, stag, ptr in findings:
-                        # print("      -", sym, stag, ptr)
-                        if self.can_reduce(sym, idx + depth - 1):
-                            # print(ptr > 0, ptr)
-                            if ptr > 0:
-                                nxt_depth = depth + ptr
-                                max_depth = max(nxt_depth, max_depth)
-                                # print(nxt_depth)
-                                for bt in base_tag:
-                                    queue_depth[nxt_depth][sym].add(tuple(list(bt) + list(stag)))
-                            else:
-                                for bt in base_tag:
-                                    possible_tags.add(tuple(list(bt) + list(stag)))                
-                depth += 1
-                # print("- ITER DEPTH END:", depth, "/", max_depth, '\n')
+            possible_tags = possible_tags.union(self.resolve_stag(rptr2vtx(state), idx, base))
                                 
         return possible_tags
 
 
     def get_nth_last_token_stag(self, n:int) -> Set[List[str]]:
-        # base = []
-        # if (rule_tag_idx := self.value_stack[-(n+1)][1]) >= 0:
-        #     base.append(
-        #         self.parse_conf.rule_tags[rule_tag_idx]
-        #     )
-        
         idx = self._get_nth_last_token(n)
         if idx == -1:
             return set()
@@ -595,7 +481,7 @@ class TagParserState(ParserState[StateT]):
                     if ptr >= len(state.rule.expansion):
                         continue
                     sym = state.rule.expansion[ptr].name
-                    if not self.can_reduce(sym, idx - 1):
+                    if not self.can_reduce(rptr2vtx(state), idx):
                         continue
                 # print("PASS")
                 exp_len = len(state.rule.expansion)

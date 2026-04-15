@@ -1,7 +1,7 @@
 "Provides for superficial grammar analysis."
 
 from collections import Counter, defaultdict
-from typing import List, Dict, Iterator, FrozenSet, Set, Union, Tuple
+from typing import List, Dict, Iterator, FrozenSet, Set, Union, Tuple, Any
 from queue import PriorityQueue
 
 from ..utils import bfs, fzset, classify, OrderedSet
@@ -162,6 +162,12 @@ class StateMap:
         # print("    len(findings):", len(findings))
         return findings        
 
+def rptr2vtx(ruleptr: RulePtr) -> Tuple[str, Tuple[str], int]:
+    sym = str(ruleptr.rule.origin.name)
+    rule = tuple(ruleptr.rule.expansion)
+    ptr = ruleptr.index
+    return (sym, rule, ptr)
+
 class StateMapV2:
     def __init__(self, state: State):
         # make sure DAG invariant holds
@@ -172,6 +178,7 @@ class StateMapV2:
 
         self.sym_rule_to_idx = defaultdict(dict) # str -> (List[str] -> int)
         self.sym_idx_to_rule = defaultdict(dict) # str -> (int -> List[str])
+        self.sym_idx_to_meta = defaultdict(dict) # str -> (int -> Rule)
         self.sym_to_idx = {} # str -> int
         self.idx_to_sym = {} # int -> str
 
@@ -210,8 +217,58 @@ class StateMapV2:
                 idx = len(self.sym_rule_to_idx[lhs_sym])
                 self.sym_rule_to_idx[lhs_sym][tuple(rule.expansion)] = idx
                 self.sym_idx_to_rule[lhs_sym][idx] = tuple(rule.expansion)
+                self.sym_idx_to_meta[lhs_sym][idx] = rule
 
         self.build_edges()
+
+    def check_fun(self, check_type : str):
+        if check_type == 'remainder':
+            def check(cur, nxt, cur_check) -> Tuple[str]:
+                (nxt_sym_idx, nxt_rule_idx, nxt_ptr) = nxt
+                nxt_sym = self.idx_to_sym[nxt_sym_idx]
+                nxt_rule = self.sym_idx_to_rule[nxt_sym][nxt_rule_idx]
+                remainder = nxt_rule[nxt_ptr + 1:]
+                return cur_check + remainder
+            return tuple(), check
+        elif check_type == 'tagrule':
+            def check(cur, nxt, cur_check) -> Tuple[bool, str]:
+                (found, tag) = cur_check
+
+                if found:
+                    return cur_check
+                
+                (nxt_sym_idx, nxt_rule_idx, nxt_ptr) = nxt
+                nxt_sym = self.idx_to_sym[nxt_sym_idx]
+                nxt_rule_meta = self.sym_idx_to_meta[nxt_sym][nxt_rule_idx]
+
+                if (
+                    nxt_ptr < len(nxt_rule_meta.expansion) 
+                    and isinstance(nxt_rule_meta.expansion[nxt_ptr], TagNonTerminal) 
+                    and not nxt_rule_meta.expansion[nxt_ptr].is_parameter
+                ):
+                    tag = nxt_rule_meta.expansion[nxt_ptr].tag
+                    return (True, tag)
+                else:
+                    return (False, None)
+
+            return (False, None), check
+        elif check_type == 'stag':
+            def check(cur, nxt, cur_check) -> Tuple[str]:
+                (nxt_sym_idx, nxt_rule_idx, nxt_ptr) = nxt
+                nxt_sym = self.idx_to_sym[nxt_sym_idx]
+                nxt_rule_meta = self.sym_idx_to_meta[nxt_sym][nxt_rule_idx]
+
+                if nxt_ptr < len(nxt_rule_meta.expansion) and isinstance(nxt_rule_meta.expansion[nxt_ptr], TagNonTerminal):
+                    new_stag = nxt_rule_meta.expansion[nxt_ptr].rule_tag
+                    return cur_check + (new_stag,) if new_stag is not None else cur_check
+                else:
+                    return cur_check
+            return tuple(), check
+        else:
+            return True, lambda cur, nxt, cur_check: True
+                
+
+
 
     def build_edges(self):
         
@@ -273,7 +330,7 @@ class StateMapV2:
 
         return True
 
-    def get_path(self, start_ruleptr) -> Tuple[Tuple[str, List[str], int], List[str]]:
+    def get_paths(self, start_ruleptr, nondeterministic=False, check='bool') -> Dict[Tuple[str, List[str], int], Any]:
         (start_sym, start_rule, start_ptr) = start_ruleptr
         start_vtx = (
             self.sym_to_idx[start_sym],
@@ -282,7 +339,13 @@ class StateMapV2:
         )
 
         queue = [start_vtx]
-        visited = {start_vtx : []}
+        visited = defaultdict(dict) if nondeterministic else {}
+        start_init, check_fun = self.check_fun(check)
+
+        if nondeterministic:
+            visited[start_vtx][start_init] = False
+        else:
+            visited[start_vtx] = start_init
         
         qidx = 0
         while qidx < len(queue):
@@ -290,14 +353,21 @@ class StateMapV2:
             qidx += 1
 
             for adj in self.back_edges[cur_vtx]:
-                if adj not in visited:
-                    (nxt_sym_idx, nxt_rule_idx, nxt_ptr) = adj
-                    nxt_sym = self.idx_to_sym[nxt_sym_idx]
-                    nxt_rule = self.sym_idx_to_rule[nxt_sym][nxt_rule_idx]
-                    remainder = nxt_rule[nxt_ptr + 1:]
-                    visited[adj] = visited[cur_vtx] + list(remainder)
-                    queue.append(adj)
+                if nondeterministic:
+                    for cur_check, used in visited[cur_vtx].items():
+                        if used:
+                            continue
+                        new_check = check_fun(cur_vtx, adj, cur_check)
+                        if new_check not in visited[adj]:
+                            visited[adj][new_check] = False
+                            queue.append(adj)
+                else:
+                    if adj not in visited:
+                        visited[adj] = check_fun(cur_vtx, adj, visited[cur_vtx])
+                        queue.append(adj)
+                    
 
+        result = {}
         for ruleptr in self.repr_ruleptr:
             ptr = ruleptr.index
             rule = tuple(ruleptr.rule.expansion)
@@ -308,9 +378,9 @@ class StateMapV2:
             vtx = (sym_idx, rule_idx, ptr)
 
             if vtx in visited:
-                return (lhs_sym, rule, ptr), visited[vtx]
+                result[(lhs_sym, rule, ptr)] = visited[vtx]
 
-        return None, None
+        return result
 
     def get_shortest_paths(self, start_ruleptr) -> Dict[Tuple[str, List[str], int], List[str]]:
         (start_sym, start_rule, start_ptr) = start_ruleptr
@@ -359,10 +429,7 @@ class StateMapV2:
 
     def prepare(self):
         for ruleptr in self.repr_ruleptr:
-            ptr = ruleptr.index
-            rule = ruleptr.rule
-            lhs_sym = str(rule.origin.name)
-            yield (lhs_sym, tuple(rule.expansion), ptr)
+            yield rptr2vtx(ruleptr)
         
 
 # state generation ensures no duplicate LR0ItemSets
