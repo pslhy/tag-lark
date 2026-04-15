@@ -6,7 +6,7 @@ from ..lexer import Token, TagToken, LexerThread
 from ..common import ParserCallbacks
 from ..rule_analyzer import RuleAnalyzer
 
-from .grammar_analysis import StateMap
+from .grammar_analysis import StateMap, StateMapV2
 from .lalr_analysis import Shift, ParseTableBase, StateT
 from lark.exceptions import UnexpectedToken
 
@@ -149,6 +149,7 @@ class TagParserState(ParserState[StateT]):
         
         self.last_idx = 0
         self.map_cache = dict()
+        self.map_cache_v2 = dict()
         self.ra_cache = dict()
 
     @property
@@ -231,52 +232,51 @@ class TagParserState(ParserState[StateT]):
 
                 if is_end and state_stack[-1][0] == end_state:
                     return value_stack[-1] if len(value_stack) > 0 else None
-    
-    def fill_symbols(self):
-        state_stack = self.state_stack
-        states = self.parse_conf.states
 
-        filled = []
-        while True:
-            state, _ = state_stack[-1]
-            if isinstance(state, int):
-                state = self.parse_conf.parse_table.idx_to_state[state]
-            ptr = None
-            for s in state:
-                if s.index > 0:
-                    if ptr is None or ptr.index < s.index:
-                        ptr = s
-                    elif ptr.index <= s.index:
-                        if s.rule.origin.name in [x.name for x in s.rule.expansion[:s.index]]:
-                            continue
-                        terms_to_fill = lambda p: len(p.rule.expansion) - p.index
-                        if terms_to_fill(s) <= terms_to_fill(ptr):
-                            ptr = s
+    def fill_symbols(self, fill_type='any'):
+        if fill_type == 'shortest':
+            state_stack = self.state_stack
+
+            top_state_map_v2 = self.get_state_map_v2_index_of(0)
+            candidates = {(sym, rule, ptr) : list(rule)[ptr:] for (sym, rule, ptr) in top_state_map_v2.prepare()}
+
+            for i in range(1, len(state_stack)):
+                state_map_v2 = self.get_state_map_v2_index_of(i)
+                new_candidates = {}
+                for (src_sym, src_rule, src_ptr), fills in candidates.items():
+                    results = state_map_v2.get_shortest_paths((src_sym, src_rule, src_ptr - 1))
+                    src_dist = len(fills)
+                    for (dst_sym, dst_rule, dst_ptr), syms in results.items():
+                        dst_vtx = (dst_sym, dst_rule, dst_ptr)
+                        if dst_vtx not in new_candidates or src_dist + len(syms) < len(new_candidates[dst_vtx]):
+                            new_candidates[dst_vtx] = fills + syms
+                candidates = new_candidates
             
-            rule = ptr.rule
-            if rule.origin.name == self.parse_conf.start:
-                break
-
-            if ptr is None:
-                assert False, "No valid ptr to fill symbols"
-
-            symbols = ptr.rule.expansion[ptr.index:]
-            filled.extend(symbols)
-
-            del state_stack[-ptr.index:]
-
-            # print(filled)
-            # print(ptr)
-            # if len(symbols) > 0:
-            #     print(symbols)
+            min_cost = None
+            argmin = None
+            for vtx in candidates:
+                cost = len(candidates[vtx])
+                if min_cost is None or cost < min_cost:
+                    min_cost = cost
+                    argmin = candidates[vtx]
             
-            _action, new_state = states[state_stack[-1][0]][rule.origin.name]
-            assert _action is Shift
-            state_stack.append((new_state, 0))
+            return argmin
+                
+        else:
+            state_stack = self.state_stack
 
-        filled = [x.name for x in filled]
-        return filled
+            top_state_map_v2 = self.get_state_map_v2_index_of(0)
+            (sym, rule, ptr) = next(top_state_map_v2.prepare())
 
+            fills = list(rule)[ptr:]
+
+            for i in range(1, len(state_stack)):
+                state_map_v2 = self.get_state_map_v2_index_of(i)
+                (sym, rule, ptr), syms = state_map_v2.get_path((sym, rule, ptr - 1))
+                fills = fills + syms
+
+            return fills
+            
 
     def _get_nth_last_token(self, n: int) -> int:
         n = n + 1
@@ -297,6 +297,17 @@ class TagParserState(ParserState[StateT]):
             else:
                 self.map_cache[states] = StateMap(states)
         return self.map_cache[states]
+
+    def get_state_map_v2_index_of(self, idx: int) -> StateMap:
+        _idx = -(idx + 1)
+        states, _ = self.state_stack[_idx]
+        if self.map_cache_v2.get(states) is None:
+            if isinstance(states, int):
+                real_states = self.parse_conf.parse_table.idx_to_state[states]
+                self.map_cache_v2[states] = StateMapV2(real_states)
+            else:
+                self.map_cache_v2[states] = StateMapV2(states)
+        return self.map_cache_v2[states]
 
     def parent_check(self, tg_sym: str, idx: int, leaf: str) -> bool:
         state_map = self.get_state_map_index_of(idx)
@@ -321,6 +332,7 @@ class TagParserState(ParserState[StateT]):
                 return sym == tg_sym
 
         for ruleptr in state_map.repr_ruleptr:
+            # repr_ruleptr is guaranteed to be in form of A -> ... α ⋅ β, so no need to check ptr == 0 case.
             rule_name = str(ruleptr.rule.origin.name)
             ptr = ruleptr.index
             if idx > 0 and ptr >= len(ruleptr.rule.expansion): # almost-reduce check
@@ -334,10 +346,74 @@ class TagParserState(ParserState[StateT]):
             if not self.can_reduce(new_tg_sym, idx - 1): # can future symbol be reduced? -> if so, current ruleptr can be reduced.
                 continue
                 
+            # parent stack must contatin ruleptr like A -> ... ⋅ α β. 
             if self.parent_check(tg_sym, idx + 1, rule_name): # does reducing current ruleptr affect to target symbol?
+                # parent stack 
+                # CASE 1
+                #      A  -> ⋅ α β
+                #      A1 -> ⋅ A ...
+                #      ...
+                #      An -> ⋅ An-1 ...
+                #      TG -> ⋅ An ...
+                #      B  -> ... ⋅ TG ...
+                # get_roots() : A -> A1 -> ... -> An -> [TG]
+                # if `An+1 -> An` and `C -> ... ⋅ An+1` are in state-map of idx+1, then get_roots() return [TG, An+1]
+                #
+                # CASE 2
+                #      α is TG
                 return True
 
         return False
+    
+    # def parent_check_v2(self, tg_sym: str, idx: int, leaf: str) -> Tuple[bool, List[str]]:
+    #     # 다익스트라 알고리즘으로 최단거리
+    #     # path 구하고 뒤집기
+    #     # 시작 정점 ㅣ leaf, 도착 정점 ㅣ tg_sym 
+
+    # def can_reduce_v2(self, tg_sym: str, idx: int, shortest: bool = False) -> Tuple[bool, List[str]]:
+    #     if idx == -1:
+    #         return True, []
+        
+    #     state_map = self.get_state_map_index_of(idx)
+    #     tmp_path = None
+    #     for ruleptr in state_map.repr_ruleptr:
+    #         rule_name = str(ruleptr.rule.origin.name)
+    #         rule = ruleptr.rule
+    #         ptr = ruleptr.index
+    #         # almost-reduce check
+    #         if ptr == len(ruleptr.rule.expansion):
+    #             # only the top element of the state stack
+    #             if idx > 0: 
+    #                 continue
+
+    #         new_tg_sym = rule.expansion[ptr].name
+    #         do_not_check_parent = rule.expansion[ptr-1].name == tg_sym
+    #         # rvs_remain = [] if idx > 0 else rule.expansion[ : ptr - 1 : -1]
+
+    #         c, path = self.can_reduce_v2(new_tg_sym, idx - 1, shortest=shortest)
+    #         if not c:
+    #             continue
+    #         if idx == 0:
+    #             path = rule.expansion[ : ptr - 1 : -1]
+
+    #         if do_not_check_parent:
+    #             if not shortest:
+    #                 return True, path
+    #             if tmp_path is None or len(path) < len(tmp_path):
+    #                 tmp_path = path
+    #             continue
+
+    #         _c, parent_path = self.parent_check_v2(tg_sym, idx + 1, rule_name)
+    #         if _c:
+    #             if not shortest:
+    #                 return True, parent_path + path
+    #             if tmp_path is None or len(parent_path) + len(path) < len(tmp_path):
+    #                 tmp_path = parent_path + path 
+        
+    #     if tmp_path is not None:
+    #         return True, tmp_path
+    #     return False, []
+
 
     def _get_possible_tag_from_state(self, idx: int, ignore_base: bool = False) -> Set[Optional[str]]:
         _idx = -(idx + 1)

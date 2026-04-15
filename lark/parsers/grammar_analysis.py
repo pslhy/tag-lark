@@ -1,7 +1,8 @@
 "Provides for superficial grammar analysis."
 
 from collections import Counter, defaultdict
-from typing import List, Dict, Iterator, FrozenSet, Set, Union
+from typing import List, Dict, Iterator, FrozenSet, Set, Union, Tuple
+from queue import PriorityQueue
 
 from ..utils import bfs, fzset, classify, OrderedSet
 from ..exceptions import GrammarError
@@ -160,6 +161,209 @@ class StateMap:
                         findings.add((parent, new_stag, ptr)) 
         # print("    len(findings):", len(findings))
         return findings        
+
+class StateMapV2:
+    def __init__(self, state: State):
+        # make sure DAG invariant holds
+        # all vertex are ruleptrs
+
+        self.repr_sym = None
+        self.repr_ruleptr = []
+
+        self.sym_rule_to_idx = defaultdict(dict) # str -> (List[str] -> int)
+        self.sym_idx_to_rule = defaultdict(dict) # str -> (int -> List[str])
+        self.sym_to_idx = {} # str -> int
+        self.idx_to_sym = {} # int -> str
+
+        self.is_bottom = False
+
+        self.edges = defaultdict(list) # (int, int, int) -> List[(int, int, int)]
+        self.back_edges = defaultdict(list) # (int, int, int) -> List[(int, int, int)]
+
+        for ruleptr in state:
+            ptr = ruleptr.index
+            rule = ruleptr.rule
+            lhs_sym = str(rule.origin.name)
+            nxt_sym = rule.expansion[ptr].name if ptr < len(rule.expansion) else None
+            # repr_ruleptr routines
+            if ptr > 0 or lhs_sym.startswith('$root_'):
+                self.repr_ruleptr.append(ruleptr)
+                if lhs_sym.startswith('$root_'):
+                    self.is_bottom = True
+                else:
+                    if self.repr_sym is not None:
+                        assert self.repr_sym == ruleptr.rule.expansion[ptr - 1], f"INVARIANT FAILED: Multiple representation symbols in state: {self.repr_sym}, {ruleptr.rule.expansion[ptr - 1]}"
+                    self.repr_sym = ruleptr.rule.expansion[ptr - 1]
+            
+            # caching routines
+            if lhs_sym not in self.sym_to_idx:
+                idx = len(self.sym_to_idx)
+                self.sym_to_idx[lhs_sym] = idx
+                self.idx_to_sym[idx] = lhs_sym
+            
+            if nxt_sym is not None and nxt_sym not in self.sym_to_idx:
+                idx = len(self.sym_to_idx)
+                self.sym_to_idx[nxt_sym] = idx
+                self.idx_to_sym[idx] = nxt_sym
+
+            if tuple(rule.expansion) not in self.sym_rule_to_idx[lhs_sym]:
+                idx = len(self.sym_rule_to_idx[lhs_sym])
+                self.sym_rule_to_idx[lhs_sym][tuple(rule.expansion)] = idx
+                self.sym_idx_to_rule[lhs_sym][idx] = tuple(rule.expansion)
+
+        self.build_edges()
+
+    def build_edges(self):
+        
+        queue = []
+
+        # queue initalize
+        for ruleptr in self.repr_ruleptr:
+            ptr = ruleptr.index
+            rule = ruleptr.rule
+            lhs_sym = str(rule.origin.name)
+            
+            # sym_idx = self.sym_to_idx[lhs_sym]
+            rule_idx = self.sym_rule_to_idx[lhs_sym][tuple(rule.expansion)]
+            queue.append((lhs_sym, rule_idx, ptr))
+
+        # BFS
+        qidx = 0
+        while qidx < len(queue):
+            c_sym, c_rule_idx, c_ptr = queue[qidx]
+            c_sym_idx = self.sym_to_idx[c_sym]
+            cur_vtx = (c_sym_idx, c_rule_idx, c_ptr)
+            qidx += 1
+
+            if c_ptr >= len(self.sym_idx_to_rule[c_sym][c_rule_idx]):
+                continue
+            nxt_sym = self.sym_idx_to_rule[c_sym][c_rule_idx][c_ptr].name
+            nxt_sym_idx = self.sym_to_idx[nxt_sym]
+
+            for nxt_rule_idx in self.sym_idx_to_rule[nxt_sym]:
+                nxt_vtx = (nxt_sym_idx, nxt_rule_idx, 0)
+
+                if self.validate_edge(cur_vtx, nxt_vtx):
+                    self.edges[cur_vtx].append(nxt_vtx)
+                    self.back_edges[nxt_vtx].append(cur_vtx)
+
+                    if nxt_vtx not in queue:
+                        queue.append((nxt_sym, nxt_rule_idx, 0))
+
+    def validate_edge(self, cur_vtx, nxt_vtx):
+        # validate DAG invariant
+        if cur_vtx == nxt_vtx:
+            return False
+
+        if nxt_vtx in self.edges[cur_vtx]:
+            return False
+
+        stack = [nxt_vtx]
+        visited = {nxt_vtx}
+
+        while stack:
+            vtx = stack.pop()
+            if vtx == cur_vtx:
+                return False
+
+            for adj in self.edges[vtx]:
+                if adj not in visited:
+                    visited.add(adj)
+                    stack.append(adj)
+
+        return True
+
+    def get_path(self, start_ruleptr) -> Tuple[Tuple[str, List[str], int], List[str]]:
+        (start_sym, start_rule, start_ptr) = start_ruleptr
+        start_vtx = (
+            self.sym_to_idx[start_sym],
+            self.sym_rule_to_idx[start_sym][start_rule],
+            start_ptr
+        )
+
+        queue = [start_vtx]
+        visited = {start_vtx : []}
+        
+        qidx = 0
+        while qidx < len(queue):
+            cur_vtx = queue[qidx]
+            qidx += 1
+
+            for adj in self.back_edges[cur_vtx]:
+                if adj not in visited:
+                    (nxt_sym_idx, nxt_rule_idx, nxt_ptr) = adj
+                    nxt_sym = self.idx_to_sym[nxt_sym_idx]
+                    nxt_rule = self.sym_idx_to_rule[nxt_sym][nxt_rule_idx]
+                    remainder = nxt_rule[nxt_ptr + 1:]
+                    visited[adj] = visited[cur_vtx] + list(remainder)
+                    queue.append(adj)
+
+        for ruleptr in self.repr_ruleptr:
+            ptr = ruleptr.index
+            rule = tuple(ruleptr.rule.expansion)
+            lhs_sym = str(ruleptr.rule.origin.name)
+
+            sym_idx = self.sym_to_idx[lhs_sym]
+            rule_idx = self.sym_rule_to_idx[lhs_sym][rule]
+            vtx = (sym_idx, rule_idx, ptr)
+
+            if vtx in visited:
+                return (lhs_sym, rule, ptr), visited[vtx]
+
+        return None, None
+
+    def get_shortest_paths(self, start_ruleptr) -> Dict[Tuple[str, List[str], int], List[str]]:
+        (start_sym, start_rule, start_ptr) = start_ruleptr
+        start_vtx = (
+            self.sym_to_idx[start_sym],
+            self.sym_rule_to_idx[start_sym][start_rule],
+            start_ptr
+        )
+
+        queue = PriorityQueue()
+        visited = {start_vtx : []}
+        distance = {start_vtx : 0}
+
+        queue.put((0, start_vtx))
+
+        while not queue.empty():
+            (dist, cur_vtx) = queue.get()
+            if distance[cur_vtx] < dist:
+                continue
+
+            for adj in self.back_edges[cur_vtx]:
+                (nxt_sym_idx, nxt_rule_idx, nxt_ptr) = adj
+                nxt_sym = self.idx_to_sym[nxt_sym_idx]
+                nxt_rule = self.sym_idx_to_rule[nxt_sym][nxt_rule_idx]
+                remainder = list(nxt_rule[nxt_ptr + 1:])
+                if adj not in distance or dist + len(remainder) < distance[adj]:
+                    visited[adj] = visited[cur_vtx] + remainder
+                    distance[adj] = dist + len(remainder)
+                    queue.put((distance[adj], adj))
+                    
+
+        result = {}
+        for ruleptr in self.repr_ruleptr:
+            ptr = ruleptr.index
+            rule = tuple(ruleptr.rule.expansion)
+            lhs_sym = str(ruleptr.rule.origin.name)
+
+            sym_idx = self.sym_to_idx[lhs_sym]
+            rule_idx = self.sym_rule_to_idx[lhs_sym][rule]
+            vtx = (sym_idx, rule_idx, ptr)
+
+            if vtx in visited:
+                result[(lhs_sym, rule, ptr)] = visited[vtx]
+
+        return result
+
+    def prepare(self):
+        for ruleptr in self.repr_ruleptr:
+            ptr = ruleptr.index
+            rule = ruleptr.rule
+            lhs_sym = str(rule.origin.name)
+            yield (lhs_sym, tuple(rule.expansion), ptr)
+        
 
 # state generation ensures no duplicate LR0ItemSets
 class LR0ItemSet:
