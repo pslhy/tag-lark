@@ -233,7 +233,7 @@ class TagParserState(ParserState[StateT]):
                 if is_end and state_stack[-1][0] == end_state:
                     return value_stack[-1] if len(value_stack) > 0 else None
 
-    def fill_symbols(self, fill_type='any'):
+    def fill_symbols(self, fill_type='shortest'):
         if fill_type == 'shortest':
             state_stack = self.state_stack
 
