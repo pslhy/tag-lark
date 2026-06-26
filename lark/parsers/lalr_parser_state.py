@@ -141,11 +141,21 @@ class ParserState(Generic[StateT]):
 
 class TagParserState(ParserState[StateT]):
 
-    def __init__(self, parse_conf: TagParseConf[StateT], lexer: LexerThread, state_stack=None, value_stack=None):
+    def __init__(
+        self,
+        parse_conf: TagParseConf[StateT],
+        lexer: LexerThread,
+        state_stack=None,
+        value_stack=None,
+        span_stack=None,
+        reduce_events=None,
+    ):
         self.parse_conf : TagParseConf[StateT] = parse_conf
         self.lexer = lexer
         self.state_stack = state_stack or [(self.parse_conf.start_state, 0)]
         self.value_stack = value_stack or []
+        self.span_stack = span_stack or []
+        self.reduce_events = reduce_events or []
         
         self.last_idx = 0
         self.map_cache = dict()
@@ -155,9 +165,234 @@ class TagParserState(ParserState[StateT]):
     def position(self) -> StateT:
         return self.state_stack[-1][0]
 
+    def copy(self, deepcopy_values=True) -> 'TagParserState[StateT]':
+        return type(self)(
+            self.parse_conf,
+            self.lexer,
+            copy(self.state_stack),
+            deepcopy(self.value_stack) if deepcopy_values else copy(self.value_stack),
+            deepcopy(self.span_stack) if deepcopy_values else copy(self.span_stack),
+            deepcopy(self.reduce_events) if deepcopy_values else copy(self.reduce_events),
+        )
+
+    def reduce_event_count(self):
+        return len(self.reduce_events)
+
+    def get_reduce_events_since(self, index):
+        return self.reduce_events[index:]
+
+    def get_active_tagged_expr_contexts(self, tags=("TYPE", "NOTYPE")):
+        """Return open tagged expression spans from the actual parser stack.
+
+        A parser state can contain LR items for alternatives that were possible
+        at that earlier point but are not on the concrete path taken by the
+        current token prefix.  Only report a tagged expression when the stack
+        suffix above that state can still reduce to the tagged expression
+        symbol, matching the path-sensitive tag checks used by
+        ``get_nth_last_token_tag``.
+        """
+
+        target_tags = set(tags)
+        contexts = []
+        token_counts = [count for _state, count in self.state_stack]
+        prefix_counts = []
+        total = 0
+        for count in token_counts:
+            total += count
+            prefix_counts.append(total)
+
+        current_end = None
+        if self.span_stack:
+            current_end = self.span_stack[-1][1]
+
+        stack_len = len(self.state_stack)
+        for stack_idx, (state, _count) in enumerate(self.state_stack):
+            states = state
+            if isinstance(states, int):
+                states = self.parse_conf.parse_table.idx_to_state[states]
+
+            token_count_before = prefix_counts[stack_idx]
+            start = 0
+            if token_count_before > 0 and token_count_before - 1 < len(self.span_stack):
+                start = self.span_stack[token_count_before - 1][1]
+            if start is None:
+                continue
+
+            end = current_end if current_end is not None else start
+            if end is None or end <= start:
+                continue
+
+            seen = set()
+            suffix_idx = stack_len - stack_idx - 2
+            for item in states:
+                ptr = item.index
+                if ptr >= len(item.rule.expansion):
+                    continue
+                sym = item.rule.expansion[ptr]
+                tag = getattr(sym, "tag", None)
+                if tag not in target_tags:
+                    continue
+                name = getattr(sym, "name", str(sym))
+                if "expr" not in name:
+                    continue
+                if not self.can_reduce(name, suffix_idx):
+                    continue
+                if self._tagged_symbol_already_completed(stack_idx, name):
+                    continue
+                key = (name, tag, start, end)
+                if key in seen:
+                    continue
+                seen.add(key)
+                contexts.append(
+                    {
+                        "symbol": name,
+                        "tag": tag,
+                        "start": start,
+                        "end": end,
+                    }
+                )
+
+        contexts.sort(key=lambda item: (item["start"], item["end"]))
+        return contexts
+
+    def _repr_symbol_name_at_stack_index(self, stack_idx):
+        if stack_idx < 0 or stack_idx >= len(self.state_stack):
+            return None
+        reverse_idx = len(self.state_stack) - stack_idx - 1
+        state_map = self.get_state_map_index_of(reverse_idx)
+        repr_sym = state_map.repr_sym
+        if repr_sym is None:
+            return None
+        return getattr(repr_sym, "name", str(repr_sym))
+
+    def _tagged_symbol_already_completed(self, stack_idx, symbol_name):
+        """Return true when this tagged symbol is below later parser input.
+
+        LR stacks keep the state before a shifted nonterminal until the parent
+        rule reduces.  If the stack element immediately above that state already
+        represents the tagged expression and there are more elements after it,
+        the expression has ended and the later symbols belong to the surrounding
+        construct, not to an active expression prefix.
+        """
+
+        completed_idx = stack_idx + 1
+        if completed_idx >= len(self.state_stack) - 1:
+            return False
+        return self._repr_symbol_name_at_stack_index(completed_idx) == symbol_name
+
+    def _token_span(self, token):
+        start = getattr(token, "start_pos", None)
+        end = getattr(token, "end_pos", None)
+        if start is None or end is None:
+            return (None, None)
+        return (start, end)
+
+    def _join_spans(self, spans):
+        starts = [start for start, _ in spans if start is not None]
+        ends = [end for _, end in spans if end is not None]
+        if not starts or not ends:
+            return (None, None)
+        return (min(starts), max(ends))
+
+    def _origin_tagged_expr_children(self, rule, parent_state, spans):
+        start, end = self._join_spans(spans)
+        if start is None or end is None:
+            return []
+
+        state_items = parent_state
+        if isinstance(state_items, int):
+            state_items = self.parse_conf.parse_table.idx_to_state[state_items]
+
+        children = []
+        seen = set()
+        origin_name = getattr(rule.origin, "name", str(rule.origin))
+        for item in state_items:
+            ptr = item.index
+            if ptr >= len(item.rule.expansion):
+                continue
+            sym = item.rule.expansion[ptr]
+            name = getattr(sym, "name", str(sym))
+            if name != origin_name:
+                continue
+            tag = getattr(sym, "tag", None)
+            if tag not in {"TYPE", "NOTYPE"}:
+                continue
+            if getattr(sym, "is_parameter", False):
+                continue
+            if "expr" not in name:
+                continue
+
+            key = (name, tag, start, end)
+            if key in seen:
+                continue
+            seen.add(key)
+            children.append(
+                {
+                    "symbol": name,
+                    "tag": tag,
+                    "start": start,
+                    "end": end,
+                    "kind": "origin",
+                }
+            )
+        return children
+
+    def _record_reduce_event(self, rule, states, spans, parent_state):
+        if not spans:
+            return
+
+        origin_children = self._origin_tagged_expr_children(
+            rule,
+            parent_state,
+            spans,
+        )
+        expr_children = []
+        anchor = 0
+        for sym, (_, length) in zip(rule.expansion, states):
+            child_spans = spans[anchor : anchor + length]
+            anchor += length
+            tag = getattr(sym, "tag", None)
+            if tag not in {"TYPE", "NOTYPE"}:
+                continue
+            if getattr(sym, "is_parameter", False):
+                continue
+            start, end = self._join_spans(child_spans)
+            if start is None or end is None:
+                continue
+            child = {
+                "symbol": getattr(sym, "name", str(sym)),
+                "tag": tag,
+                "start": start,
+                "end": end,
+                "kind": "child",
+            }
+            expr_children.append(child)
+
+        expr_children = origin_children + expr_children
+        type_children = [
+            child for child in expr_children if child.get("tag") == "TYPE"
+        ]
+
+        if not expr_children:
+            return
+
+        start, end = self._join_spans(spans)
+        self.reduce_events.append(
+            {
+                "origin": rule.origin.name,
+                "expansion": [getattr(sym, "name", str(sym)) for sym in rule.expansion],
+                "start": start,
+                "end": end,
+                "origin_children": origin_children,
+                "type_children": type_children,
+                "expr_children": expr_children,
+            }
+        )
+
     def feed_token(self, token: Token, is_end=False) -> Any:
         state_stack = self.state_stack
         value_stack = self.value_stack
+        span_stack = self.span_stack
         states = self.parse_conf.states
         end_state = self.parse_conf.end_state
         callbacks = self.parse_conf.callbacks
@@ -188,6 +423,7 @@ class TagParserState(ParserState[StateT]):
                         if self.last_idx != 0:
                             break
                 value_stack.append((-1, -1))
+                span_stack.append(self._token_span(token))
                 return
             else:
                 # reduce+shift as many times as necessary
@@ -208,9 +444,18 @@ class TagParserState(ParserState[StateT]):
                 if token_sum:
                     v = value_stack[-token_sum:]
                     del value_stack[-token_sum:]
+                    span_values = span_stack[-token_sum:]
+                    del span_stack[-token_sum:]
                 else:
                     v = []
+                    span_values = []
                     
+                self._record_reduce_event(
+                    rule,
+                    s,
+                    span_values,
+                    state_stack[-1][0],
+                )
                 value = callbacks[rule](v, s) if callbacks else v
 
                 _action, new_state = states[state_stack[-1][0]][rule.origin.name]
@@ -228,6 +473,7 @@ class TagParserState(ParserState[StateT]):
                         if self.last_idx != 0:
                             break
                 value_stack.extend(value)
+                span_stack.extend(span_values)
 
                 if is_end and state_stack[-1][0] == end_state:
                     return value_stack[-1] if len(value_stack) > 0 else None
