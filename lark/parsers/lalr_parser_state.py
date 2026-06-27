@@ -8,7 +8,7 @@ from ..rule_analyzer import RuleAnalyzer
 
 from .grammar_analysis import StateMap
 from .lalr_analysis import Shift, ParseTableBase, StateT
-from lark.exceptions import UnexpectedToken
+from ..exceptions import UnexpectedToken
 
 ###{standalone
 MAX = 1<<30
